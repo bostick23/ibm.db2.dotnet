@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - run: dotnet restore Db2i.sln
+      - run: dotnet test Db2i.sln --configuration Release --no-restore
+      - run: dotnet pack src/Db2i/Db2i.csproj --configuration Release --no-restore
