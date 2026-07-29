@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest a compatible addition to Db2i.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Describe the application need and why existing APIs do not cover it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the desired public API and IBM i behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: Protocol or API references
+      description: Link relevant JTOpen classes or .NET documentation when available.

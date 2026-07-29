@@ -55,6 +55,8 @@ public sealed class Db2iParameter : DbParameter
 
     public override byte Scale { get; set; }
 
+    internal bool DbTypeWasSet => _dbTypeWasSet;
+
     public override void ResetDbType()
     {
         _dbType = DbType.String;

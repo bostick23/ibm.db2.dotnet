@@ -10,13 +10,16 @@ public sealed class Db2iConnectionStringBuilder : DbConnectionStringBuilder
     public const int DefaultDatabasePort = 8471;
     public const int DefaultSecureDatabasePort = 9471;
 
-    private static readonly string[] ServerAliases = ["Server", "Data Source", "Host"];
+    private static readonly string[] ServerAliases = ["Server", "Data Source", "DataSource", "Host"];
     private static readonly string[] UserAliases = ["User ID", "UserID", "UID", "User"];
     private static readonly string[] PasswordAliases = ["Password", "PWD"];
     private static readonly string[] DatabaseAliases = ["Database", "Initial Catalog"];
     private static readonly string[] DefaultCollectionAliases = ["Default Collection", "Current Schema"];
     private static readonly string[] SslAliases = ["SSL", "Use SSL", "Secure"];
+    private static readonly string[] TrustServerCertificateAliases =
+        ["Trust Server Certificate", "TrustServerCertificate"];
     private static readonly string[] TimeoutAliases = ["Connect Timeout", "Connection Timeout"];
+    private static readonly string[] MaxPoolSizeAliases = ["Max Pool Size", "Maximum Pool Size"];
 
     public Db2iConnectionStringBuilder()
     {
@@ -64,6 +67,13 @@ public sealed class Db2iConnectionStringBuilder : DbConnectionStringBuilder
         set => SetCanonical("SSL", value, SslAliases);
     }
 
+    /// <summary>Disables TLS certificate validation when explicitly enabled.</summary>
+    public bool TrustServerCertificate
+    {
+        get => GetBoolean(false, TrustServerCertificateAliases);
+        set => SetCanonical("Trust Server Certificate", value, TrustServerCertificateAliases);
+    }
+
     /// <summary>The database host-server port. Defaults to 8471, or 9471 when SSL is enabled.</summary>
     public int Port
     {
@@ -88,6 +98,24 @@ public sealed class Db2iConnectionStringBuilder : DbConnectionStringBuilder
         }
     }
 
+    /// <summary>Enables physical IBM i session pooling. The default is <see langword="true"/>.</summary>
+    public bool Pooling
+    {
+        get => GetBoolean(true, "Pooling");
+        set => SetCanonical("Pooling", value, new[] { "Pooling" });
+    }
+
+    /// <summary>The maximum number of physical sessions in the pool. The default is 100.</summary>
+    public int MaxPoolSize
+    {
+        get => GetInt32(MaxPoolSizeAliases, defaultValue: 100, minimum: 1, maximum: int.MaxValue);
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+            SetCanonical("Max Pool Size", value, MaxPoolSizeAliases);
+        }
+    }
+
     internal Db2iConnectionSettings BuildSettings()
     {
         if (string.IsNullOrWhiteSpace(Server))
@@ -108,7 +136,10 @@ public sealed class Db2iConnectionStringBuilder : DbConnectionStringBuilder
             DefaultCollection.Trim(),
             Port,
             UseSsl,
-            TimeSpan.FromSeconds(ConnectTimeout));
+            TrustServerCertificate,
+            TimeSpan.FromSeconds(ConnectTimeout),
+            Pooling,
+            MaxPoolSize);
     }
 
     private string GetString(params string[] aliases)
@@ -217,4 +248,30 @@ internal sealed record Db2iConnectionSettings(
     string DefaultCollection,
     int Port,
     bool UseSsl,
-    TimeSpan ConnectTimeout);
+    bool TrustServerCertificate,
+    TimeSpan ConnectTimeout,
+    bool Pooling,
+    int MaxPoolSize)
+{
+    internal Db2iConnectionPoolKey PoolKey => new(
+        Server,
+        UserId,
+        Password,
+        Database,
+        DefaultCollection,
+        Port,
+        UseSsl,
+        TrustServerCertificate,
+        MaxPoolSize);
+}
+
+internal sealed record Db2iConnectionPoolKey(
+    string Server,
+    string UserId,
+    string Password,
+    string Database,
+    string DefaultCollection,
+    int Port,
+    bool UseSsl,
+    bool TrustServerCertificate,
+    int MaxPoolSize);

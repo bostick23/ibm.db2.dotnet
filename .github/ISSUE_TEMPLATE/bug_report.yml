@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a reproducible defect in Db2i.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include passwords, connection strings, host names, job identifiers, or private SQL data.
+        Security vulnerabilities must be reported through the Security tab instead.
+  - type: input
+    id: version
+    attributes:
+      label: Db2i version
+      placeholder: 0.5.0-alpha.1
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: .NET and IBM i versions
+      placeholder: .NET 8; IBM i 7.5
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide sanitized code and steps that reproduce the issue.
+      render: csharp
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Include SQLCODE/SQLSTATE and stack trace, with all sensitive data removed.

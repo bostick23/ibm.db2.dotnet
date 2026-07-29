@@ -8,15 +8,36 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  build-test-pack:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |
             8.0.x
             10.0.x
-      - run: dotnet restore Db2i.sln
-      - run: dotnet test Db2i.sln --configuration Release --no-restore
-      - run: dotnet pack src/Db2i/Db2i.csproj --configuration Release --no-restore
+
+      - name: Restore
+        run: dotnet restore Db2i.sln
+
+      - name: Test
+        run: dotnet test Db2i.sln --configuration Release --no-restore
+
+      - name: Pack
+        run: dotnet pack src/Db2i/Db2i.csproj --configuration Release --no-restore --output artifacts -p:ContinuousIntegrationBuild=true
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: Db2i-packages
+          path: |
+            artifacts/*.nupkg
+            artifacts/*.snupkg
+          if-no-files-found: error

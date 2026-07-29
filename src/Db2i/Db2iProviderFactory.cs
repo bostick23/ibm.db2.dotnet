@@ -18,4 +18,7 @@ public sealed class Db2iProviderFactory : DbProviderFactory
     public override DbConnectionStringBuilder CreateConnectionStringBuilder() => new Db2iConnectionStringBuilder();
 
     public override DbParameter CreateParameter() => new Db2iParameter();
+
+    public override DbDataSource CreateDataSource(string connectionString)
+        => new Db2iDataSource(connectionString);
 }

@@ -15,7 +15,14 @@ internal static class ExchangeRandomSeeds
 
     internal static ExchangeRandomSeedsRequest CreateRequest(ushort serverId = ClientAccessHeader.SqlServerId)
     {
-        var clientSeed = RandomNumberGenerator.GetBytes(8);
+        var clientSeed = new byte[8];
+        do
+        {
+            RandomNumberGenerator.Fill(clientSeed);
+            clientSeed[0] &= 0x7F;
+        }
+        while (clientSeed.AsSpan().IndexOfAnyExcept((byte)0) < 0);
+
         return CreateRequest(clientSeed, serverId);
     }
 
@@ -26,6 +33,18 @@ internal static class ExchangeRandomSeeds
         if (clientSeed.Length != 8)
         {
             throw new ArgumentException("Il client seed deve essere lungo 8 byte.", nameof(clientSeed));
+        }
+
+        if (clientSeed.IndexOfAnyExcept((byte)0) < 0)
+        {
+            throw new ArgumentException("Il client seed non può essere zero.", nameof(clientSeed));
+        }
+
+        if (clientSeed[0] > 0xDF)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(clientSeed),
+                "Il client seed supera il massimo accettato da IBM i.");
         }
 
         var bytes = new byte[28];

@@ -25,17 +25,6 @@ public sealed class Db2iProviderSurfaceTests
     }
 
     [Fact]
-    public void OpenFailsHonestlyUntilTheHandshakeIsImplemented()
-    {
-        using var connection = new Db2iConnection("Server=my-system;User ID=MYUSER;Password=secret");
-
-        var exception = Assert.Throws<Db2iException>(() => connection.Open());
-
-        Assert.Contains("handshake", exception.Message);
-        Assert.Equal(ConnectionState.Closed, connection.State);
-    }
-
-    [Fact]
     public void ParametersImplementTheStandardContract()
     {
         using var command = new Db2iCommand();

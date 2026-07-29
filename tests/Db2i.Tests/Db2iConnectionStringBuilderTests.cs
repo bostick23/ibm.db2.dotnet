@@ -17,6 +17,18 @@ public sealed class Db2iConnectionStringBuilderTests
         Assert.Equal(Db2iConnectionStringBuilder.DefaultDatabasePort, builder.Port);
         Assert.False(builder.UseSsl);
         Assert.Equal(15, builder.ConnectTimeout);
+        Assert.True(builder.Pooling);
+        Assert.Equal(100, builder.MaxPoolSize);
+    }
+
+    [Fact]
+    public void ParsesCompactDataSourceAlias()
+    {
+        var builder = new Db2iConnectionStringBuilder(
+            "DataSource=my-system;UserId=MYUSER;Password=secret");
+
+        Assert.Equal("my-system", builder.Server);
+        Assert.Equal("MYUSER", builder.UserId);
     }
 
     [Fact]
@@ -52,5 +64,22 @@ public sealed class Db2iConnectionStringBuilderTests
         DbConnectionStringBuilder builder = Db2iProviderFactory.Instance.CreateConnectionStringBuilder();
 
         Assert.IsType<Db2iConnectionStringBuilder>(builder);
+    }
+
+    [Fact]
+    public void ParsesAndCanonicalizesPoolingSettings()
+    {
+        var builder = new Db2iConnectionStringBuilder(
+            "Server=my-system;User ID=MYUSER;Pooling=no;Maximum Pool Size=7");
+
+        Assert.False(builder.Pooling);
+        Assert.Equal(7, builder.MaxPoolSize);
+
+        builder.Pooling = true;
+        builder.MaxPoolSize = 12;
+
+        Assert.DoesNotContain("Maximum Pool Size", builder.ConnectionString);
+        Assert.Contains("Max Pool Size=12", builder.ConnectionString);
+        Assert.Throws<ArgumentOutOfRangeException>(() => builder.MaxPoolSize = 0);
     }
 }

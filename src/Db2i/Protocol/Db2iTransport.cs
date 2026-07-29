@@ -20,27 +20,23 @@ internal sealed class Db2iTransport : IAsyncDisposable, IDisposable
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        using var timeoutSource = settings.ConnectTimeout == Timeout.InfiniteTimeSpan
-            || settings.ConnectTimeout == TimeSpan.Zero
-            ? null
-            : new CancellationTokenSource(settings.ConnectTimeout);
-        using var linkedSource = timeoutSource is null
-            ? null
-            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
-        var effectiveToken = linkedSource?.Token ?? cancellationToken;
-
         var client = new TcpClient();
         try
         {
-            await client.ConnectAsync(settings.Server, settings.Port, effectiveToken).ConfigureAwait(false);
+            await client.ConnectAsync(settings.Server, settings.Port, cancellationToken).ConfigureAwait(false);
             Stream stream = client.GetStream();
 
             if (settings.UseSsl)
             {
-                var sslStream = new SslStream(stream, leaveInnerStreamOpen: false);
+                var sslStream = new SslStream(
+                    stream,
+                    leaveInnerStreamOpen: false,
+                    settings.TrustServerCertificate
+                        ? static (_, _, _, _) => true
+                        : null);
                 await sslStream.AuthenticateAsClientAsync(
                         new SslClientAuthenticationOptions { TargetHost = settings.Server },
-                        effectiveToken)
+                        cancellationToken)
                     .ConfigureAwait(false);
                 stream = sslStream;
             }
@@ -59,6 +55,27 @@ internal sealed class Db2iTransport : IAsyncDisposable, IDisposable
 
     internal ValueTask<ClientAccessPacket> ReceiveAsync(CancellationToken cancellationToken)
         => ClientAccessPacketCodec.ReadAsync(_stream, cancellationToken);
+
+    internal bool IsPotentiallyUsable
+    {
+        get
+        {
+            try
+            {
+                var socket = _client.Client;
+                return _client.Connected
+                    && !(socket.Poll(0, SelectMode.SelectRead) && socket.Available == 0);
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+            catch (SocketException)
+            {
+                return false;
+            }
+        }
+    }
 
     public void Dispose()
     {
