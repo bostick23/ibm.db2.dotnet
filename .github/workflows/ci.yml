@@ -37,7 +37,7 @@ jobs:
         run: dotnet pack src/Db2i/Db2i.csproj --configuration Release --no-restore --output artifacts -p:ContinuousIntegrationBuild=true
 
       - name: Upload packages
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: Db2i-packages
           path: |
