@@ -13,7 +13,7 @@ body:
     id: version
     attributes:
       label: Db2i version
-      placeholder: 0.5.0-alpha.1
+      placeholder: 0.5.0-alpha.3
     validations:
       required: true
   - type: input

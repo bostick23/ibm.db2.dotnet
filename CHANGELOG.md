@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.0-alpha.3] - 2026-07-29
+
+Package-identity and positioning follow-up to `0.5.0-alpha.2`. Provider
+behavior is unchanged.
+
+### Changed
+
+- renamed the NuGet package from `Db2i` to `Db2i.AdoNet` before its first
+  publication to NuGet.org;
+- clarified the project's primary value: open-source, fully managed, direct
+  Db2 for IBM i connectivity on modern .NET without IBM client software, ODBC,
+  native libraries, or a Db2 Connect license;
+- expanded the package title, description, tags, and README for NuGet search
+  discoverability.
+
+The assembly name and root namespace remain `Db2i`; the public API and provider
+behavior are unchanged.
+
 ## [0.5.0-alpha.2] - 2026-07-29
 
 Documentation-only follow-up to `0.5.0-alpha.1`. Provider behavior is
@@ -37,5 +55,6 @@ Experimental pre-release. Not recommended for production workloads.
   Kerberos, MFA, and system naming are not supported;
 - the public API and wire behavior may change before a stable release.
 
+[0.5.0-alpha.3]: https://github.com/bostick23/ibm.db2.dotnet/releases/tag/v0.5.0-alpha.3
 [0.5.0-alpha.2]: https://github.com/bostick23/ibm.db2.dotnet/releases/tag/v0.5.0-alpha.2
 [0.5.0-alpha.1]: https://github.com/bostick23/ibm.db2.dotnet/releases/tag/v0.5.0-alpha.1

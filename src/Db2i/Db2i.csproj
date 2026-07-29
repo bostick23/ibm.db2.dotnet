@@ -5,17 +5,17 @@
     <Nullable>enable</Nullable>
     <AssemblyName>Db2i</AssemblyName>
     <RootNamespace>Db2i</RootNamespace>
-    <PackageId>Db2i</PackageId>
-    <Version>0.5.0-alpha.2</Version>
+    <PackageId>Db2i.AdoNet</PackageId>
+    <Version>0.5.0-alpha.3</Version>
     <Authors>Db2i contributors</Authors>
     <Copyright>Copyright (c) 2026 Db2i contributors.</Copyright>
-    <Title>Db2i</Title>
-    <Description>An open-source ADO.NET provider for Db2 for IBM i.</Description>
+    <Title>Db2i - Open-source ADO.NET Provider for IBM i</Title>
+    <Description>The open-source, fully managed ADO.NET provider for Db2 for IBM i on modern .NET. Connect directly over TCP or TLS without IBM client software, ODBC, native libraries, or a Db2 Connect license.</Description>
     <PackageLicenseExpression>IPL-1.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageTags>db2;ibm-i;iseries;as400;ado.net;database</PackageTags>
+    <PackageTags>db2;db2-for-i;db2i;ibm-i;ibmi;as400;iseries;ado.net;adonet;dotnet;dotnet-core;open-source;managed;database;provider;driver;tcp;tls</PackageTags>
     <PackageProjectUrl>https://github.com/bostick23/ibm.db2.dotnet</PackageProjectUrl>
-    <PackageReleaseNotes>Documentation-only follow-up to 0.5.0-alpha.1. All public documentation and the NuGet README are now in English; provider behavior is unchanged.</PackageReleaseNotes>
+    <PackageReleaseNotes>Renames the NuGet package from Db2i to Db2i.AdoNet and highlights its open-source, fully managed IBM i connectivity without IBM client software, ODBC, native libraries, or a Db2 Connect license. The assembly, namespaces, public API, and provider behavior are unchanged.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/bostick23/ibm.db2.dotnet</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>

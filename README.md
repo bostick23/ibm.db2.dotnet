@@ -2,17 +2,37 @@
 
 [![CI](https://github.com/bostick23/ibm.db2.dotnet/actions/workflows/ci.yml/badge.svg)](https://github.com/bostick23/ibm.db2.dotnet/actions/workflows/ci.yml)
 
-An open-source ADO.NET provider for Db2 for IBM i (AS/400, iSeries), based on
-the host-server protocol used by [JTOpen](https://github.com/IBM/JTOpen).
+The open-source, fully managed ADO.NET provider for Db2 for IBM i (AS/400,
+iSeries) on modern .NET.
 
-> Status: **pre-alpha**. `0.5.0-alpha.2` is a documentation-only follow-up to
-> `0.5.0-alpha.1`; the provider includes connection pooling and
-> `Db2iDataSource`, both verified against a real IBM i system.
+**Direct TCP/TLS connectivity. No IBM client installation. No ODBC. No native
+libraries. No Db2 Connect license.**
+
+Db2i implements the database host-server protocol used by
+[JTOpen](https://github.com/IBM/JTOpen) directly in managed .NET code. To the
+best of our knowledge, it is currently the only open-source ADO.NET provider
+built specifically for direct Db2 for IBM i connectivity on modern .NET.
+
+> Status: **pre-alpha**. The NuGet package ID is `Db2i.AdoNet`.
+> `0.5.0-alpha.3` changes package identity and positioning only; the assembly,
+> namespaces, public API, and provider behavior are unchanged. Connection
+> pooling and `Db2iDataSource` have been verified against a real IBM i system.
+
+## Why Db2i
+
+- built for .NET 8 and .NET 10 with no operating-system-specific dependency;
+- implements standard `System.Data.Common` abstractions;
+- connects directly to the IBM i database host server over TCP or TLS;
+- requires no IBM i Access Client Solutions installation;
+- requires no ODBC or OLE DB driver;
+- requires no Db2 Connect client or license;
+- developed in public under the IBM Public License 1.0.
 
 ## Connecting
 
 The provider opens a session directly with the IBM i database host server,
-without requiring an IBM driver on the client:
+without requiring an IBM driver on the client. Reference the
+`Db2i.AdoNet` package; the assembly and namespaces remain `Db2i`:
 
 ```csharp
 await using var connection = new Db2iConnection(

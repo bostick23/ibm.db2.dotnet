@@ -12,7 +12,7 @@ milestones; active implementation work is tracked here.
   against a real IBM i system**.
 - Most recently completed milestone: **M3 — DML and transactions**,
   version `0.4.0-alpha.1`.
-- Current version: **`0.5.0-alpha.2`**.
+- Current version: **`0.5.0-alpha.3`**.
 - Current verification: 104 Release tests passed; .NET 8 and .NET 10 builds;
   Integration category 12/12, including 11 real TCP cases covering queries,
   DML, transactions, job reuse, and rollback on pool return. The TLS case
@@ -60,6 +60,8 @@ block M3.
 - [x] Generate and verify the `0.5.0-alpha.1` NuGet package.
 - [x] Publish English project documentation and an English NuGet README in
   `0.5.0-alpha.2`.
+- [x] Rename the NuGet package to `Db2i.AdoNet` and foreground its open-source,
+  fully managed, client-free IBM i connectivity in `0.5.0-alpha.3`.
 
 On July 29, 2026, the pool reused the same IBM i job and rolled back an
 abandoned transaction on the authorized journaled table before handing the
