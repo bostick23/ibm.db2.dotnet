@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.0-alpha.2] - 2026-07-29
+
+Documentation-only follow-up to `0.5.0-alpha.1`. Provider behavior is
+unchanged.
+
+### Changed
+
+- translated the README, roadmap, ADR, contribution guide, and work-status
+  documentation into English;
+- updated the README embedded in the NuGet package to English;
+- clarified English NuGet metadata and release notes.
+
 ## [0.5.0-alpha.1] - 2026-07-29
 
 Experimental pre-release. Not recommended for production workloads.
@@ -25,4 +37,5 @@ Experimental pre-release. Not recommended for production workloads.
   Kerberos, MFA, and system naming are not supported;
 - the public API and wire behavior may change before a stable release.
 
+[0.5.0-alpha.2]: https://github.com/bostick23/ibm.db2.dotnet/releases/tag/v0.5.0-alpha.2
 [0.5.0-alpha.1]: https://github.com/bostick23/ibm.db2.dotnet/releases/tag/v0.5.0-alpha.1

@@ -1,15 +1,15 @@
-# Contribuire
+# Contributing
 
-Ogni modifica al wire protocol deve includere:
+Every wire-protocol change must include:
 
-1. il riferimento alla classe o al metodo JTOpen confrontato;
-2. almeno un test con byte attesi deterministici;
-3. limiti espliciti per lunghezze e allocazioni provenienti dalla rete;
-4. cancellazione e cleanup verificati per il codice I/O;
-5. nessuna password, seed o token nei log.
+1. a reference to the JTOpen class or method used for comparison;
+2. at least one test with deterministic expected bytes;
+3. explicit limits for lengths and allocations derived from network input;
+4. verified cancellation and cleanup for I/O paths;
+5. no passwords, seeds, or tokens in logs.
 
-Per i test contro un IBM i reale non inserire credenziali nel repository.
-I test di integrazione leggono, in modo opt-in:
+Never commit credentials for tests against a real IBM i system. Integration
+tests read the following variables on an opt-in basis:
 
 - `DB2I_TEST_TCP_CONNECTION_STRING`;
 - `DB2I_TEST_TLS_CONNECTION_STRING`;
@@ -20,16 +20,15 @@ I test di integrazione leggono, in modo opt-in:
 - `DB2I_TEST_DML_DATE_COLUMN`;
 - `DB2I_TEST_DML_DECIMAL_COLUMN`.
 
-Le variabili assenti non causano connessioni esterne e nessuna connection string
-viene scritta nell'output dei test.
+Unset variables do not cause external connections, and connection strings are
+never written to test output.
 
-I test DML sono disattivati salvo opt-in esplicito con
-`DB2I_TEST_DML_ENABLED=true`, accettano soltanto identificatori SQL semplici,
-validano la struttura configurata prima di scrivere e ripuliscono ogni riga
-creata. I test di transazione reale richiedono inoltre che la tabella sia
-journaled.
+DML tests remain disabled unless explicitly enabled with
+`DB2I_TEST_DML_ENABLED=true`. They accept only simple SQL identifiers, validate
+the configured table structure before writing, and remove every row they
+create. Real transaction tests also require the table to be journaled.
 
-Eseguire prima di aprire una pull request:
+Run this command before opening a pull request:
 
 ```powershell
 dotnet test Db2i.sln --configuration Release

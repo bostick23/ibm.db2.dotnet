@@ -1,33 +1,34 @@
-# ADR 0001: usare il database host-server protocol
+# ADR 0001: Use the database host-server protocol
 
-Data: 2026-07-24  
-Stato: accettata
+Date: 2026-07-24
 
-## Contesto
+Status: accepted
 
-IBM i espone più percorsi di accesso al database. JTOpen contiene sia componenti
-Toolbox sia codice relativo a DDM/DRDA. L'obiettivo di questo progetto è un
-porting progressivo del percorso JDBC Toolbox.
+## Context
 
-## Decisione
+IBM i exposes several database access paths. JTOpen contains both Toolbox
+components and DDM/DRDA-related code. This project's goal is a progressive port
+of the Toolbox JDBC path.
 
-L'MVP implementa il servizio `as-database` Client Access:
+## Decision
 
-- server ID SQL `0xE004`;
-- porta 8471 in chiaro;
-- porta 9471 con TLS;
-- header Client Access da 20 byte;
-- richieste SQL native del database host server.
+The MVP implements the Client Access `as-database` service:
 
-DRDA sulle porte 446/448 non fa parte dell'MVP.
+- SQL server ID `0xE004`;
+- clear-text port 8471;
+- TLS port 9471;
+- 20-byte Client Access headers;
+- native database host-server SQL requests.
 
-L'API pubblica è basata su `System.Data.Common`; nessun dettaglio del protocollo
-deve essere necessario per usare `Db2iConnection`, `Db2iCommand` e
-`Db2iDataReader`.
+DRDA on ports 446/448 is outside the MVP.
 
-## Conseguenze
+The public API is based on `System.Data.Common`. No protocol detail should be
+required to use `Db2iConnection`, `Db2iCommand`, or `Db2iDataReader`.
 
-- il comportamento può essere confrontato direttamente con JTOpen;
-- non è necessario installare un driver nativo IBM sul client;
-- autenticazione, CCSID e formati SQL devono essere implementati nel provider;
-- il porting derivato resta soggetto a IBM Public License 1.0.
+## Consequences
+
+- behavior can be compared directly with JTOpen;
+- no native IBM driver needs to be installed on the client;
+- authentication, CCSID handling, and SQL formats must be implemented by the
+  provider;
+- the derived port remains subject to the IBM Public License 1.0.

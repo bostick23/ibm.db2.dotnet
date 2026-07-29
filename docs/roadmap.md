@@ -1,82 +1,84 @@
 # Roadmap
 
-## M0 — Fondamenta del provider
+## M0 — Provider foundations
 
-Completato nello scaffold iniziale:
+Completed in the initial scaffold:
 
-- superficie ADO.NET compilabile su .NET 8 e .NET 10;
-- parser della connection string;
-- framing Client Access, TCP/TLS ed exchange dei random seed;
-- test unitari deterministici del wire format.
+- an ADO.NET surface that builds for .NET 8 and .NET 10;
+- connection-string parsing;
+- Client Access framing, TCP/TLS transport, and random-seed exchange;
+- deterministic unit tests for the wire format.
 
-## M1 — Connessione SQL autenticata
+## M1 — Authenticated SQL connection
 
-Implementazione completata in `0.2.0-alpha.1`:
+Implementation completed in `0.2.0-alpha.1`:
 
-- [x] supportare QPWDLVL 0/1 (DES), 2/3 (SHA-1) e 4
+- [x] support QPWDLVL 0/1 (DES), 2/3 (SHA-1), and 4
   (PBKDF2-HMAC-SHA-512);
-- [x] inviare `start server` al servizio database e validarne il return code;
-- [x] inviare il set minimo di attributi SQL;
-- [x] acquisire CCSID, VRM, livello funzionale e identificativo del job;
-- [x] portare `Db2iConnection.State` a `Open` soltanto dopo una reply SQL valida;
-- [x] chiudere socket e job in ogni percorso di errore o cancellazione;
-- [x] verificare TCP e TLS con un server host simulato;
-- [x] verificare TCP contro un IBM i reale, incluso CCSID 280;
-- [ ] verificare TLS contro un IBM i 7.3+ reale.
+- [x] send `start server` to the database service and validate its return code;
+- [x] send the minimum SQL attribute set;
+- [x] obtain CCSID, VRM, functional level, and job identifier;
+- [x] change `Db2iConnection.State` to `Open` only after a valid SQL reply;
+- [x] close the socket and job on every error or cancellation path;
+- [x] verify TCP and TLS with a simulated host server;
+- [x] verify TCP against a real IBM i system, including CCSID 280;
+- [ ] verify TLS against a real IBM i 7.3+ system.
 
-## M2 — Primo percorso query
+## M2 — First query path
 
-Implementazione completata in `0.3.0-alpha.1`:
+Implementation completed in `0.3.0-alpha.1`:
 
-- [x] `Prepare`, `ExecuteReader` ed `ExecuteScalar` sincroni e asincroni;
-- [x] prepare/execute con marker posizionali `?`, inferenza `DbType`,
-  `Size`/`Precision`/`Scale` e NULL tipizzati;
-- [x] fetch streaming a blocchi e `CommandBehavior.CloseConnection`;
-- [x] tipi iniziali: `SMALLINT`, `INTEGER`, `BIGINT`, `DECIMAL`, `REAL`,
-  `DOUBLE`, `CHAR`, `VARCHAR`, `DATE`, `TIME`, `TIMESTAMP`, `BINARY`,
+- [x] synchronous and asynchronous `Prepare`, `ExecuteReader`, and
+  `ExecuteScalar`;
+- [x] prepare/execute with positional `?` markers, `DbType` inference,
+  `Size`/`Precision`/`Scale`, and typed NULL values;
+- [x] block-based streaming fetch and `CommandBehavior.CloseConnection`;
+- [x] initial types: `SMALLINT`, `INTEGER`, `BIGINT`, `DECIMAL`, `REAL`,
+  `DOUBLE`, `CHAR`, `VARCHAR`, `DATE`, `TIME`, `TIMESTAMP`, `BINARY`, and
   `VARBINARY`;
-- [x] SQLSTATE, SQLCODE e testo diagnostico esposti tramite `Db2iException`;
-- [x] reader forward-only esclusivo per connessione e cleanup di cursor,
-  descriptor e RPB;
-- [x] timeout/cancellazione I/O con chiusura conservativa della connessione;
-- [x] test simulati TCP/TLS e test TCP reale read-only per null, CCSID 280,
-  nomi colonna, parametri e fetch multi-blocco.
+- [x] expose SQLSTATE, SQLCODE, and diagnostic text through `Db2iException`;
+- [x] one exclusive forward-only reader per connection and cleanup of cursors,
+  descriptors, and RPBs;
+- [x] I/O timeout/cancellation with conservative connection closure;
+- [x] simulated TCP/TLS tests and real read-only TCP tests for NULL values,
+  CCSID 280, column names, parameters, and multi-block fetch.
 
-## M3 — DML e transazioni
+## M3 — DML and transactions
 
-Implementazione disponibile in `0.4.0-alpha.1`:
+Implementation available in `0.4.0-alpha.1`:
 
-- [x] `ExecuteNonQuery` sincrono/asincrono, marker input e righe interessate
-  lette da `SQLERRD3`;
-- [x] autocommit esplicito, commit, rollback e rollback su dispose;
-- [x] `ReadUncommitted`, `ReadCommitted`, `RepeatableRead` e `Serializable`
-  mappati su commitment control IBM i;
-- [x] una sola transazione locale per connessione e associazione obbligatoria
-  `DbCommand.Transaction`;
-- [x] comando host-server `CANCEL` su sessione autenticata ausiliaria, drain
-  della reply e riuso sicuro della connessione;
-- [x] test simulati per DML, transazioni, timeout/cancel e perdita di
-  sincronizzazione;
-- [x] test DML autocommit contro IBM i reale con firma tabella e cleanup;
-- [x] commit e rollback reali contro la tabella journaled autorizzata, inclusa
-  la verifica dei dati dopo ogni boundary;
-- [x] fallback compatibile con JTOpen quando IBM i rifiuta il cambio della
-  persistenza dei locator durante l'avvio del commitment control.
+- [x] synchronous/asynchronous `ExecuteNonQuery`, input markers, and
+  affected-row counts read from `SQLERRD3`;
+- [x] explicit autocommit, commit, rollback, and rollback on disposal;
+- [x] `ReadUncommitted`, `ReadCommitted`, `RepeatableRead`, and `Serializable`
+  mapped to IBM i commitment control;
+- [x] one local transaction per connection and mandatory
+  `DbCommand.Transaction` association;
+- [x] host-server `CANCEL` through an authenticated auxiliary session, reply
+  draining, and safe connection reuse;
+- [x] simulated tests for DML, transactions, timeout/cancellation, and loss of
+  synchronization;
+- [x] real IBM i autocommit DML tests with table-signature validation and
+  cleanup;
+- [x] real commit and rollback against the authorized journaled table,
+  including data verification after each boundary;
+- [x] a JTOpen-compatible fallback when IBM i rejects a locator-persistence
+  change while commitment control is starting.
 
-## M4 — Compatibilità applicativa
+## M4 — Application compatibility
 
-- [x] pooling globale con limite, timeout, reset e clear;
-- [x] `DbDataSource` con pool dedicato e supporto tramite `DbProviderFactory`;
-- [x] collaudo pooling TCP e transazionale contro IBM i reale;
-- [ ] batch;
-- [ ] LOB e locator;
-- [ ] stored procedure e parametri output;
+- [x] global pooling with capacity, timeout, reset, and clear operations;
+- [x] `DbDataSource` with a dedicated pool and `DbProviderFactory` support;
+- [x] real IBM i TCP and transactional pooling verification;
+- [ ] batching;
+- [ ] LOBs and locators;
+- [ ] stored procedures and output parameters;
 - [ ] metadata/schema;
-- [ ] integrazione con Dapper e, separatamente, un provider EF Core.
+- [ ] Dapper integration and, separately, an EF Core provider.
 
-## Decisioni rinviate
+## Deferred decisions
 
-- supporto DRDA sulle porte 446/448;
-- autenticazione Kerberos, profile token e identity token;
-- naming convention `*SYS`;
-- record-level access e gli altri servizi Toolbox.
+- DRDA support on ports 446/448;
+- Kerberos, profile-token, and identity-token authentication;
+- `*SYS` naming convention;
+- record-level access and other Toolbox services.

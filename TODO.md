@@ -1,127 +1,130 @@
-# Stato dei lavori
+# Work status
 
-Ultimo aggiornamento: 29 luglio 2026.
+Last updated: July 29, 2026.
 
-Questo file registra lo stato operativo del progetto. La roadmap definisce i
-milestone; qui vengono aggiornate le attività durante l'implementazione.
+This file records the project's operational status. The roadmap defines the
+milestones; active implementation work is tracked here.
 
-## Stato corrente
+## Current status
 
-- Milestone attivo: **M4 — Compatibilità applicativa**.
-- Fase corrente: **M4.1 pooling e `DbDataSource` completati e collaudati su
-  IBM i reale**.
-- Ultimo milestone completato: **M3 — DML e transazioni**,
-  versione `0.4.0-alpha.1`.
-- Versione corrente: **`0.5.0-alpha.1`**.
-- Verifica corrente: 104 test automatici Release superati; build .NET 8 e
-  .NET 10; categoria Integration 12/12, con 11 casi TCP reali per query, DML,
-  transazioni, riuso del job e rollback al rientro nel pool. Il caso TLS non
-  apre connessioni perché la relativa variabile non è configurata.
+- Active milestone: **M4 — Application compatibility**.
+- Current phase: **M4.1 pooling and `DbDataSource`, completed and verified
+  against a real IBM i system**.
+- Most recently completed milestone: **M3 — DML and transactions**,
+  version `0.4.0-alpha.1`.
+- Current version: **`0.5.0-alpha.2`**.
+- Current verification: 104 Release tests passed; .NET 8 and .NET 10 builds;
+  Integration category 12/12, including 11 real TCP cases covering queries,
+  DML, transactions, job reuse, and rollback on pool return. The TLS case
+  performs no connection because its environment variable is not configured.
 
-## Milestone
+## Milestones
 
-- [x] M0 — Fondamenta del provider.
-- [x] M1 — Connessione SQL autenticata.
-- [x] M2 — Primo percorso query.
-- [x] M3 — DML e transazioni.
-- [ ] M4 — Compatibilità applicativa.
+- [x] M0 — Provider foundations.
+- [x] M1 — Authenticated SQL connection.
+- [x] M2 — First query path.
+- [x] M3 — DML and transactions.
+- [ ] M4 — Application compatibility.
 
-Rimane separatamente da verificare TLS contro un IBM i reale; non blocca M3.
+TLS against a real IBM i system still needs separate verification; this did not
+block M3.
 
-## M4.1 — Pooling e DbDataSource
+## M4.1 — Pooling and DbDataSource
 
 ### 1. Pooling
 
-- [x] Aggiungere `Pooling` e `Max Pool Size` alla connection string.
-- [x] Implementare pool globali per impostazioni effettive equivalenti.
-- [x] Applicare il limite anche ai waiter e includere l'attesa nel connect timeout.
-- [x] Gestire cancellazione, clear generazionale e scarto delle sessioni guaste.
-- [x] Eseguire rollback, ripristino autocommit e cleanup degli statement prima
-  del riuso.
+- [x] Add `Pooling` and `Max Pool Size` to the connection string.
+- [x] Implement global pools for equivalent effective settings.
+- [x] Apply the limit to waiters and include pool-slot waits in the connection
+  timeout.
+- [x] Handle cancellation, generation-based clearing, and disposal of unhealthy
+  sessions.
+- [x] Roll back, restore autocommit, and clean up statements before reuse.
 
 ### 2. DbDataSource
 
-- [x] Implementare `Db2iDataSource` con pool dedicato e connection string immutabile.
-- [x] Collegare `Db2iProviderFactory.CreateDataSource`.
-- [x] Supportare i comandi connectionless forniti da `DbDataSource`.
-- [x] Chiudere deterministicamente le sessioni inattive al dispose.
+- [x] Implement `Db2iDataSource` with a dedicated pool and immutable connection
+  string.
+- [x] Connect `Db2iProviderFactory.CreateDataSource`.
+- [x] Support connectionless commands supplied by `DbDataSource`.
+- [x] Close idle sessions deterministically on disposal.
 
-### 3. Verifica e rilascio
+### 3. Verification and release
 
-- [x] Coprire riuso, cap, timeout, cancellazione, reset, clear e dispose con il
-  server simulato.
-- [x] Aggiungere test opt-in per riuso del job IBM i e rollback della transazione
-  al rientro nel pool.
-- [x] Eseguire 104 test Release e compilare .NET 8/.NET 10.
-- [x] Eseguire i due test pooling contro IBM i reale.
-- [x] Generare e verificare il pacchetto NuGet `0.5.0-alpha.1`.
+- [x] Cover reuse, capacity, timeout, cancellation, reset, clear, and disposal
+  with the simulated server.
+- [x] Add opt-in tests for IBM i job reuse and transaction rollback on pool
+  return.
+- [x] Run 104 Release tests and build for .NET 8 and .NET 10.
+- [x] Run both pooling tests against a real IBM i system.
+- [x] Generate and verify the `0.5.0-alpha.1` NuGet package.
+- [x] Publish English project documentation and an English NuGet README in
+  `0.5.0-alpha.2`.
 
-Il 29 luglio 2026 il pool ha riutilizzato lo stesso job IBM i e ha eseguito il
-rollback di una transazione abbandonata sulla tabella journaled autorizzata
-prima di consegnare la sessione alla connessione successiva.
+On July 29, 2026, the pool reused the same IBM i job and rolled back an
+abandoned transaction on the authorized journaled table before handing the
+session to the next connection.
 
-## M3 — DML e transazioni
+## M3 — DML and transactions
 
-### 1. Analisi del protocollo
+### 1. Protocol analysis
 
-- [x] Individuare in JTOpen richieste e reply per execute immediato/preparato,
-  commit, rollback e cancel.
-- [x] Definire la lettura del numero di righe interessate da SQLCA.
-- [x] Definire la mappatura tra `IsolationLevel` ADO.NET e commitment control
-  IBM i.
-- [x] Definire gli stati ammessi di connessione, comando, transazione e reader.
+- [x] Identify the JTOpen requests and replies for immediate/prepared execution,
+  commit, rollback, and cancellation.
+- [x] Define how the affected-row count is read from SQLCA.
+- [x] Define the mapping between ADO.NET `IsolationLevel` and IBM i commitment
+  control.
+- [x] Define valid connection, command, transaction, and reader states.
 
 ### 2. ExecuteNonQuery
 
-- [x] Implementare `ExecuteNonQuery` e `ExecuteNonQueryAsync`.
-- [x] Supportare marker `?` e gli stessi parametri input di M2.
-- [x] Restituire correttamente il numero di righe interessate.
-- [x] Gestire warning, errori SQL, timeout e cancellazione.
-- [x] Aggiungere test con server simulato.
+- [x] Implement `ExecuteNonQuery` and `ExecuteNonQueryAsync`.
+- [x] Support `?` markers and the same input parameters as M2.
+- [x] Return the correct affected-row count.
+- [x] Handle warnings, SQL errors, timeouts, and cancellation.
+- [x] Add simulated-server tests.
 
-### 3. Transazioni
+### 3. Transactions
 
-- [x] Implementare `BeginTransaction` e il percorso asincrono ADO.NET.
-- [x] Implementare autocommit.
-- [x] Implementare `Commit`/`CommitAsync`.
-- [x] Implementare `Rollback`/`RollbackAsync`.
-- [x] Applicare e validare i livelli di isolamento supportati.
-- [x] Impedire transazioni concorrenti sulla stessa connessione.
-- [x] Aggiungere test di commit, rollback, dispose e connessione interrotta.
+- [x] Implement `BeginTransaction` and the asynchronous ADO.NET path.
+- [x] Implement autocommit.
+- [x] Implement `Commit`/`CommitAsync`.
+- [x] Implement `Rollback`/`RollbackAsync`.
+- [x] Apply and validate supported isolation levels.
+- [x] Prevent concurrent transactions on the same connection.
+- [x] Add tests for commit, rollback, disposal, and interrupted connections.
 
-### 4. Cancel e lifecycle
+### 4. Cancellation and lifecycle
 
-- [x] Implementare il comando host-server `CANCEL`.
-- [x] Mantenere utilizzabile la connessione dopo una cancellazione riuscita.
-- [x] Chiudere in modo coerente statement e cursor su rollback/dispose.
-- [x] Conservare la chiusura di sicurezza della connessione quando il protocollo
-  non può essere risincronizzato.
+- [x] Implement the host-server `CANCEL` command.
+- [x] Keep the connection usable after successful cancellation.
+- [x] Close statements and cursors consistently during rollback/disposal.
+- [x] Preserve safety closure when the protocol cannot be resynchronized.
 
-### 5. Verifica e rilascio
+### 5. Verification and release
 
-- [x] Eseguire l'intera suite Release su .NET 8 e compilare anche per .NET 10.
-- [x] Aggiungere e verificare il test TCP reale DML autocommit sulla tabella
-  autorizzata.
-- [x] Verificare commit/rollback reali dopo l'attivazione del journaling.
-- [x] Aggiornare README e roadmap.
-- [x] Generare il pacchetto NuGet M3 `0.4.0-alpha.1`.
+- [x] Run the full Release suite on .NET 8 and also build for .NET 10.
+- [x] Add and verify the real TCP autocommit DML test against the authorized
+  table.
+- [x] Verify real commit/rollback after journaling was enabled.
+- [x] Update the README and roadmap.
+- [x] Generate the M3 NuGet package `0.4.0-alpha.1`.
 
-## Dipendenze per il collaudo reale M3
+## Real M3 test prerequisites
 
-La tabella autorizzata e le sue quattro colonne sono configurate esclusivamente
-tramite variabili d'ambiente locali. Il test ne valida firma e journaling prima
-di ogni scrittura, usa un ID e un marcatore univoci e ripulisce in `finally`.
-Al 24 luglio 2026 sono stati verificati DML autocommit, rollback con assenza
-della riga e commit `Serializable` con persistenza della riga.
+The authorized table and its four columns are configured only through local
+environment variables. Before every write, the test validates its signature
+and journaling, uses a unique ID and marker, and cleans up in `finally`. On
+July 24, 2026, autocommit DML, rollback with no persisted row, and
+`Serializable` commit with a persisted row were verified.
 
-IBM i può rifiutare con return code `-601` il cambio della persistenza dei
-locator dopo l'esecuzione di uno statement. Il provider replica il fallback di
-JTOpen: disabilita quell'opzione per la sessione e ripete il cambio di modalità
-transazionale senza il relativo code point. Nessuna credenziale è salvata nei
-file del progetto.
+IBM i may return code `-601` when changing locator persistence after a statement
+has executed. The provider mirrors JTOpen's fallback: it disables that session
+option and retries the transaction-mode change without the corresponding code
+point. No credentials are stored in project files.
 
-## Criterio di completamento M3
+## M3 completion criterion
 
-Completato: `ExecuteNonQuery`, autocommit, transazioni e `CANCEL` sono
-disponibili tramite `System.Data.Common`, coperti dal server simulato e
-verificati su IBM i reale nell'area dati autorizzata.
+Complete: `ExecuteNonQuery`, autocommit, transactions, and `CANCEL` are exposed
+through `System.Data.Common`, covered by the simulated server, and verified
+against a real IBM i system in the authorized data area.

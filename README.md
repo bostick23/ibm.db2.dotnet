@@ -2,16 +2,17 @@
 
 [![CI](https://github.com/bostick23/ibm.db2.dotnet/actions/workflows/ci.yml/badge.svg)](https://github.com/bostick23/ibm.db2.dotnet/actions/workflows/ci.yml)
 
-Provider ADO.NET open source per Db2 su IBM i (AS/400, iSeries), basato sul protocollo
-host-server usato da [JTOpen](https://github.com/IBM/JTOpen).
+An open-source ADO.NET provider for Db2 for IBM i (AS/400, iSeries), based on
+the host-server protocol used by [JTOpen](https://github.com/IBM/JTOpen).
 
-> Stato: **pre-alpha**. `0.5.0-alpha.1` aggiunge pooling delle sessioni e
-> `Db2iDataSource`, verificati anche contro IBM i reale.
+> Status: **pre-alpha**. `0.5.0-alpha.2` is a documentation-only follow-up to
+> `0.5.0-alpha.1`; the provider includes connection pooling and
+> `Db2iDataSource`, both verified against a real IBM i system.
 
-## Connessione
+## Connecting
 
-Il provider apre direttamente una sessione con il database host server,
-senza installare driver IBM sul client:
+The provider opens a session directly with the IBM i database host server,
+without requiring an IBM driver on the client:
 
 ```csharp
 await using var connection = new Db2iConnection(
@@ -24,8 +25,8 @@ Console.WriteLine(connection.ServerCcsid);
 Console.WriteLine(connection.ServerJobIdentifier);
 ```
 
-Una query parametrizzata usa marker posizionali `?`; il nome del parametro è
-accettato dall'API ADO.NET ma non cambia la posizione sul wire:
+Parameterized queries use positional `?` markers. Parameter names are accepted
+by the ADO.NET API but do not change their position on the wire:
 
 ```csharp
 await using var connection = new Db2iConnection(
@@ -44,8 +45,8 @@ while (await reader.ReadAsync())
 }
 ```
 
-`ExecuteNonQuery` usa gli stessi marker posizionali e restituisce il numero di
-righe indicato da Db2 for i:
+`ExecuteNonQuery` uses the same positional markers and returns the affected-row
+count reported by Db2 for i:
 
 ```csharp
 await using var command = connection.CreateCommand();
@@ -56,8 +57,8 @@ command.Parameters.Add("customer", 938472);
 var affected = await command.ExecuteNonQueryAsync();
 ```
 
-Per una transazione locale, ogni comando deve riferirsi esplicitamente alla
-transazione attiva:
+Within a local transaction, every command must explicitly reference the active
+transaction:
 
 ```csharp
 await using var transaction =
@@ -76,7 +77,8 @@ await command.ExecuteNonQueryAsync();
 await transaction.CommitAsync();
 ```
 
-Per condividere un pool con ownership e dispose espliciti:
+Use `Db2iDataSource` when you want explicit ownership and disposal of a
+dedicated connection pool:
 
 ```csharp
 await using var dataSource = new Db2iDataSource(
@@ -85,71 +87,80 @@ await using var dataSource = new Db2iDataSource(
 await using var connection = await dataSource.OpenConnectionAsync();
 ```
 
-`DbDataSource.CreateCommand()` è supportato e apre/restituisce automaticamente
-una connessione del pool per ogni esecuzione.
+`DbDataSource.CreateCommand()` is supported. It automatically opens a pooled
+connection for each execution and returns it to the pool afterward.
 
-## Architettura
+## Architecture
 
-Il provider usa il database host server IBM i, non DRDA:
+The provider uses the IBM i database host server rather than DRDA:
 
 ```text
 DbConnection / DbCommand / DbDataReader
                  |
-          sessione SQL IBM i
+          IBM i SQL session
                  |
    Client Access data stream (big-endian)
                  |
-       TCP 8471 oppure TLS 9471
+        TCP 8471 or TLS 9471
 ```
 
-Le responsabilità sono separate:
+Responsibilities are separated as follows:
 
-- `Db2i*`: contratto pubblico ADO.NET basato su `System.Data.Common`;
-- `Db2i.Protocol`: framing, autenticazione, richieste SQL e decodifica delle reply;
-- test unitari: vettori binari e server host simulato, senza richiedere IBM i;
-- test di integrazione reali: opt-in tramite variabili d'ambiente.
+- `Db2i*`: the public ADO.NET contract built on `System.Data.Common`;
+- `Db2i.Protocol`: framing, authentication, SQL requests, and reply decoding;
+- unit tests: deterministic binary vectors and a simulated host server, with no
+  IBM i dependency;
+- real integration tests: opt-in through environment variables.
 
-## Stato implementativo
+## Implementation status
 
 - [x] `DbProviderFactory`, `DbConnection`, `DbCommand`, `DbParameter`,
-  `DbParameterCollection`, `DbTransaction` e `DbDataReader`;
-- [x] connection string con alias ADO.NET, porte 8471/9471 e timeout;
-- [x] header Client Access da 20 byte e codec di pacchetto con limiti di sicurezza;
-- [x] trasporto TCP/TLS;
-- [x] richiesta/reply `exchange random seeds` (`0x7001`/`0xF001`);
-- [x] password substitute per QPWDLVL 0-4 e richiesta `start server`;
-- [x] set degli attributi SQL e acquisizione di CCSID/VRM/job;
-- [x] lifecycle `Open`/`OpenAsync`/`Close`, timeout e cancellazione;
-- [x] TLS con validazione del certificato attiva per default;
-- [x] `Prepare`, `ExecuteReader` ed `ExecuteScalar`, sync e async;
-- [x] marker `?` con parametri input espliciti, inferiti e NULL tipizzati;
-- [x] fetch streaming in blocchi da circa 32 KiB e un reader attivo per connessione;
-- [x] `CommandBehavior.SingleRow`, `SchemaOnly`, `SequentialAccess` e
+  `DbParameterCollection`, `DbTransaction`, and `DbDataReader`;
+- [x] connection strings with common ADO.NET aliases, ports 8471/9471, and
+  connection timeout;
+- [x] 20-byte Client Access headers and packet codecs with explicit safety
+  limits;
+- [x] TCP and TLS transport;
+- [x] `exchange random seeds` request/reply (`0x7001`/`0xF001`);
+- [x] password substitution for QPWDLVL 0-4 and the `start server` request;
+- [x] SQL attribute negotiation and CCSID/VRM/job discovery;
+- [x] `Open`/`OpenAsync`/`Close` lifecycle, timeout, and cancellation;
+- [x] TLS certificate validation enabled by default;
+- [x] synchronous and asynchronous `Prepare`, `ExecuteReader`, and
+  `ExecuteScalar`;
+- [x] positional `?` markers with explicit, inferred, and typed NULL input
+  parameters;
+- [x] streaming fetch in approximately 32 KiB blocks and one active reader per
+  connection;
+- [x] `CommandBehavior.SingleRow`, `SchemaOnly`, `SequentialAccess`, and
   `CloseConnection`;
 - [x] `SMALLINT`, `INTEGER`, `BIGINT`, `DECIMAL`, `REAL`, `DOUBLE`, `CHAR`,
-  `VARCHAR`, `DATE`, `TIME`, `TIMESTAMP`, `BINARY` e `VARBINARY`;
-- [x] diagnostica `SQLCODE`, `SQLSTATE` e testo IBM i su `Db2iException`;
-- [x] `ExecuteNonQuery`, conteggio righe da SQLCA e autocommit;
-- [x] transazioni locali con commit, rollback e livelli di isolamento;
-- [x] commit e rollback verificati su una tabella journaled di IBM i reale;
-- [x] `DbCommand.Cancel`, timeout e cancellazione tramite una sessione ausiliaria;
-- [x] pooling globale e pool dedicati a `Db2iDataSource`;
-- [x] `DbProviderFactory.CreateDataSource`, clear dei pool e reset sicuro;
-- [ ] LOB, stored procedure, parametri output e batch.
+  `VARCHAR`, `DATE`, `TIME`, `TIMESTAMP`, `BINARY`, and `VARBINARY`;
+- [x] IBM i `SQLCODE`, `SQLSTATE`, and diagnostic text exposed through
+  `Db2iException`;
+- [x] `ExecuteNonQuery`, affected-row counts from SQLCA, and autocommit;
+- [x] local transactions with commit, rollback, and isolation levels;
+- [x] commit and rollback verified against a real journaled IBM i table;
+- [x] `DbCommand.Cancel`, command timeout, and cancellation through an
+  auxiliary session;
+- [x] global connection pools and dedicated `Db2iDataSource` pools;
+- [x] `DbProviderFactory.CreateDataSource`, pool clearing, and safe session
+  reset;
+- [ ] LOBs, stored procedures, output parameters, and batching.
 
-La roadmap con i criteri di accettazione è in [docs/roadmap.md](docs/roadmap.md).
-Lo stato operativo e le attività in corso sono aggiornati in [TODO.md](TODO.md).
+Acceptance criteria are tracked in [docs/roadmap.md](docs/roadmap.md).
+Current work and operational status are tracked in [TODO.md](TODO.md).
 
 ## Build
 
-Richiede .NET SDK 10 per compilare tutti i target:
+.NET SDK 10 is required to build every target:
 
 ```powershell
 dotnet test Db2i.sln --configuration Release
 dotnet pack src/Db2i/Db2i.csproj --configuration Release
 ```
 
-La libreria è multi-target `net8.0` e `net10.0`.
+The library targets both `net8.0` and `net10.0`.
 
 ## Connection string
 
@@ -167,47 +178,48 @@ Pooling=true;
 Max Pool Size=100
 ```
 
-`Port` è facoltativo: il default è 8471, oppure 9471 quando `SSL=true`.
-Sono riconosciuti anche alias comuni come `Data Source`, `UID`, `PWD`,
-`Initial Catalog` e `Current Schema`.
+`Port` is optional. Its default is 8471, or 9471 when `SSL=true`. Common aliases
+such as `Data Source`, `UID`, `PWD`, `Initial Catalog`, and `Current Schema` are
+also recognized.
 
-La validazione del certificato TLS è obbligatoria per default.
-`Trust Server Certificate=true` la disabilita esplicitamente e dovrebbe essere
-usato solo in ambienti controllati. `Connect Timeout=0` indica timeout infinito.
+TLS certificate validation is required by default.
+`Trust Server Certificate=true` explicitly disables it and should only be used
+in controlled environments. `Connect Timeout=0` means no timeout.
 
-Il pooling è attivo per default. `Max Pool Size` limita il totale delle sessioni
-fisiche attive e inattive; `Connect Timeout` include anche l'attesa di uno slot.
-`Pooling=false` ripristina la chiusura fisica a ogni `Close`. Le connessioni
-normali condividono pool globali per impostazioni equivalenti; ogni
-`Db2iDataSource` possiede invece un pool isolato, chiuso dal suo dispose.
-`Db2iConnection.ClearPool` e `ClearAllPools` invalidano anche le sessioni
-attualmente in uso, che saranno eliminate al successivo `Close`.
+Pooling is enabled by default. `Max Pool Size` limits the total number of idle
+and active physical sessions, and `Connect Timeout` also covers the wait for an
+available pool slot. `Pooling=false` restores physical close behavior on every
+`Close`. Regular connections share global pools for equivalent effective
+settings, while each `Db2iDataSource` owns an isolated pool that is closed when
+the data source is disposed. `Db2iConnection.ClearPool` and `ClearAllPools`
+also invalidate sessions currently in use; those sessions are discarded on
+their next `Close`.
 
-Prima di riutilizzare una sessione, il provider esegue rollback se necessario,
-ripristina autocommit ed elimina statement e descriptor rimasti. Una sessione
-occupata, interrotta o non sincronizzata viene scartata. M4.1 non implementa
-prewarming, pool minimo o scadenza automatica delle sessioni inattive.
+Before a session is reused, the provider rolls back when necessary, restores
+autocommit, and releases any remaining statements and descriptors. Busy,
+interrupted, or unsynchronized sessions are discarded. M4.1 does not implement
+prewarming, a minimum pool size, or automatic idle-session expiration.
 
-Il provider usa SQL naming e supporta IBM i 7.3 o successivo con password di
-sistema QPWDLVL 0-4. DRDA, naming `*SYS`, MFA, Kerberos e token di profilo non
-fanno parte di questo milestone.
+The provider uses SQL naming and supports IBM i 7.3 or later with system
+password levels QPWDLVL 0-4. DRDA, `*SYS` naming, MFA, Kerberos, and profile
+tokens are outside this milestone.
 
-`CommandTimeout=0` indica durata illimitata. M3 invia il comando host-server
-`CANCEL` da una seconda sessione autenticata e drena la reply primaria: quando
-questa risincronizzazione riesce, la connessione resta aperta. Se `CANCEL` o il
-drain falliscono, la connessione viene chiusa per sicurezza.
+`CommandTimeout=0` means no timeout. M3 sends the host-server `CANCEL` command
+from a second authenticated session and drains the primary reply. When
+resynchronization succeeds, the connection remains open. If `CANCEL` or reply
+draining fails, the connection is closed for safety.
 
-Sono supportati `ReadUncommitted`, `ReadCommitted`, `RepeatableRead` e
-`Serializable`; `Unspecified` usa `ReadCommitted`. La tabella coinvolta deve
-essere journaled su IBM i per usare commitment control. `Chaos`, `Snapshot`,
-`CommandType.StoredProcedure`, `CALL`, batch, savepoint, transazioni distribuite
-e parametri non-input non sono supportati.
+`ReadUncommitted`, `ReadCommitted`, `RepeatableRead`, and `Serializable` are
+supported; `Unspecified` uses `ReadCommitted`. Tables must be journaled on
+IBM i to use commitment control. `Chaos`, `Snapshot`,
+`CommandType.StoredProcedure`, `CALL`, batching, savepoints, distributed
+transactions, and non-input parameters are not supported.
 
-## Test contro IBM i
+## Testing against IBM i
 
-I test locali usano un database host server simulato anche per TLS. Per abilitare
-le prove reali, valorizzare una o entrambe le variabili senza salvarle nel
-repository:
+Local tests use a simulated database host server, including TLS. To enable real
+integration tests, set one or both connection variables without storing them
+in the repository:
 
 ```powershell
 $env:DB2I_TEST_TCP_CONNECTION_STRING = "Server=...;User ID=...;Password=..."
@@ -221,23 +233,24 @@ $env:DB2I_TEST_DML_DECIMAL_COLUMN = "DECIMAL_VALUE"
 dotnet test Db2i.sln --configuration Release --filter Category=Integration
 ```
 
-Se una variabile non è valorizzata, il relativo caso non apre alcuna connessione.
-Il test TCP M2 esegue query in lettura. I test M3 scrivono soltanto quando
-`DB2I_TEST_DML_ENABLED=true` e tutti gli identificatori della tabella autorizzata
-sono configurati. Gli identificatori accettano soltanto nomi SQL semplici; il
-test verifica prima una firma di quattro colonne (`DECIMAL(5,0)`, `CHAR(100)`,
-`DECIMAL(5,0)`, `DECIMAL(9,4)`), usa marcatori univoci e pulisce in `finally`.
-Il test transazionale verifica anche il journaling prima di scrivere. Le
-credenziali e i nomi dell'ambiente reale non devono essere salvati nel progetto.
-I test M4 aggiungono il riuso dello stesso job IBM i e il rollback prima del
-rientro nel pool; entrambi sono stati verificati su IBM i reale il 29 luglio
-2026.
+When a variable is unset, its corresponding test case performs no network
+connection. The M2 TCP test runs read-only queries. M3 tests write only when
+`DB2I_TEST_DML_ENABLED=true` and all identifiers for an authorized table are
+configured. Identifiers are restricted to simple SQL names. Before writing,
+the tests verify a four-column signature (`DECIMAL(5,0)`, `CHAR(100)`,
+`DECIMAL(5,0)`, `DECIMAL(9,4)`), use unique markers, and clean up in `finally`.
+Transaction tests also verify journaling before writing. Credentials and
+identifiers from a real environment must never be stored in the project.
 
-## Provenienza e licenza
+M4 tests add reuse of the same IBM i job and rollback before a session returns
+to the pool. Both behaviors were verified against a real IBM i system on
+July 29, 2026.
 
-Il progetto è un porting derivato da JTOpen. Di conseguenza è distribuito sotto
-IBM Public License 1.0, come il codice originale. I file di protocollo indicano
-le classi JTOpen dalle quali derivano.
+## Provenance and license
 
-Questo progetto non è affiliato né approvato da IBM. IBM, IBM i, AS/400, iSeries
-e Db2 sono marchi dei rispettivi titolari.
+This project is a port derived from JTOpen and is therefore distributed under
+the IBM Public License 1.0, like the original code. Protocol files identify the
+specific JTOpen classes from which they were derived.
+
+This project is not affiliated with or endorsed by IBM. IBM, IBM i, AS/400,
+iSeries, and Db2 are trademarks of their respective owners.

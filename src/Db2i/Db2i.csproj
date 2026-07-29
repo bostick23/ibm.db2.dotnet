@@ -6,15 +6,16 @@
     <AssemblyName>Db2i</AssemblyName>
     <RootNamespace>Db2i</RootNamespace>
     <PackageId>Db2i</PackageId>
-    <Version>0.5.0-alpha.1</Version>
+    <Version>0.5.0-alpha.2</Version>
     <Authors>Db2i contributors</Authors>
     <Copyright>Copyright (c) 2026 Db2i contributors.</Copyright>
-    <Description>An open source ADO.NET provider for Db2 for IBM i.</Description>
+    <Title>Db2i</Title>
+    <Description>An open-source ADO.NET provider for Db2 for IBM i.</Description>
     <PackageLicenseExpression>IPL-1.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>db2;ibm-i;iseries;as400;ado.net;database</PackageTags>
     <PackageProjectUrl>https://github.com/bostick23/ibm.db2.dotnet</PackageProjectUrl>
-    <PackageReleaseNotes>Experimental pre-release with authenticated SQL sessions, queries, DML, local transactions, cancellation, pooling, and DbDataSource support.</PackageReleaseNotes>
+    <PackageReleaseNotes>Documentation-only follow-up to 0.5.0-alpha.1. All public documentation and the NuGet README are now in English; provider behavior is unchanged.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/bostick23/ibm.db2.dotnet</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
