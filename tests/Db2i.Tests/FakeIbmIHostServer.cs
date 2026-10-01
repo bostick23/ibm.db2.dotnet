@@ -24,6 +24,7 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
     private readonly bool _stallAfterAccept;
     private readonly bool _allowTlsAuthenticationFailure;
     private readonly FakeQueryScenario? _queryScenario;
+    private readonly IReadOnlyDictionary<string, FakeQueryScenario>? _queryScenarios;
     private readonly X509Certificate2? _certificate;
     private readonly TaskCompletionSource _cancelReceived =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -40,7 +41,8 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
         bool expectDefaultCollection = false,
         bool stallAfterAccept = false,
         bool allowTlsAuthenticationFailure = false,
-        FakeQueryScenario? queryScenario = null)
+        FakeQueryScenario? queryScenario = null,
+        IReadOnlyDictionary<string, FakeQueryScenario>? queryScenarios = null)
     {
         _useTls = useTls;
         _passwordLevel = passwordLevel;
@@ -49,6 +51,7 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
         _stallAfterAccept = stallAfterAccept;
         _allowTlsAuthenticationFailure = allowTlsAuthenticationFailure;
         _queryScenario = queryScenario;
+        _queryScenarios = queryScenarios;
         _certificate = useTls ? CreateCertificate() : null;
         _listener = new TcpListener(IPAddress.Loopback, 0);
         _listener.Start();
@@ -65,6 +68,13 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
     internal string? PreparedSql { get; private set; }
 
     internal short? PreparedStatementType { get; private set; }
+
+    internal IReadOnlyList<string> PreparedStatements => _preparedStatements.ToArray();
+
+    internal IReadOnlyList<string> ExecutedSql => _executedSql.ToArray();
+
+    internal IReadOnlyList<ReadOnlyMemory<byte>?> ExecutedParameters
+        => _executedParameters.ToArray();
 
     internal IReadOnlyList<ushort> SqlRequests => _sqlRequests.ToArray();
 
@@ -91,6 +101,9 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
         => _transactionLocatorPersistence;
 
     private readonly ConcurrentQueue<ushort> _sqlRequests = new();
+    private readonly ConcurrentQueue<string> _preparedStatements = new();
+    private readonly ConcurrentQueue<string> _executedSql = new();
+    private readonly ConcurrentQueue<ReadOnlyMemory<byte>?> _executedParameters = new();
     private readonly List<(bool AutoCommit, short CommitmentLevel)> _transactionModes = [];
     private readonly List<short?> _transactionLocatorPersistence = [];
 
@@ -251,9 +264,12 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
                             .ConfigureAwait(false);
                     }
 
-                    if (_queryScenario is not null)
+                    if (_queryScenario is not null || _queryScenarios is { Count: > 0 })
                     {
-                        await RunSqlAsync(stream, _queryScenario).ConfigureAwait(false);
+                        await RunSqlAsync(
+                                stream,
+                                _queryScenario ?? _queryScenarios!.Values.First())
+                            .ConfigureAwait(false);
                         return;
                     }
 
@@ -275,9 +291,11 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
         }
     }
 
-    private async Task RunSqlAsync(Stream stream, FakeQueryScenario scenario)
+    private async Task RunSqlAsync(Stream stream, FakeQueryScenario fallbackScenario)
     {
         var blockIndexByHandle = new Dictionary<ushort, int>();
+        var scenarioByHandle = new Dictionary<ushort, FakeQueryScenario>();
+        var sqlByHandle = new Dictionary<ushort, string>();
         try
         {
             while (!_shutdown.IsCancellationRequested)
@@ -287,6 +305,7 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
                     .ConfigureAwait(false);
                 _sqlRequests.Enqueue(packet.Header.RequestReplyId);
                 var handle = BinaryPrimitives.ReadUInt16BigEndian(packet.Bytes.AsSpan(34));
+                var scenario = scenarioByHandle.GetValueOrDefault(handle, fallbackScenario);
                 switch (packet.Header.RequestReplyId)
                 {
                     case SqlProtocol.CreateRpb:
@@ -295,6 +314,15 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
                     case SqlProtocol.PrepareDescribe:
                         PreparedSql = DecodeExtendedString(packet, 0x3831);
                         PreparedStatementType = ReadInt16CodePoint(packet, 0x3812);
+                        _preparedStatements.Enqueue(PreparedSql);
+                        sqlByHandle[handle] = PreparedSql;
+                        scenario = fallbackScenario;
+                        if (_queryScenarios?.TryGetValue(PreparedSql, out var sqlScenario) == true)
+                        {
+                            scenario = sqlScenario;
+                        }
+
+                        scenarioByHandle[handle] = scenario;
                         if (scenario.StallOnPrepare)
                         {
                             await _cancelReceived.Task.WaitAsync(_shutdown.Token)
@@ -322,6 +350,8 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
                             packet.Bytes,
                             40,
                             SqlProtocol.ExtendedParameterMarkerData);
+                        _executedSql.Enqueue(sqlByHandle[handle]);
+                        _executedParameters.Enqueue(LastParameterData);
                         if (scenario.StallOnExecute)
                         {
                             await _cancelReceived.Task.WaitAsync(_shutdown.Token)
@@ -404,6 +434,8 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
                             packet.Bytes,
                             40,
                             SqlProtocol.ExtendedParameterMarkerData);
+                        _executedSql.Enqueue(sqlByHandle[handle]);
+                        _executedParameters.Enqueue(LastParameterData);
                         blockIndexByHandle[handle] = 0;
                         if (scenario.StallOnOpen)
                         {

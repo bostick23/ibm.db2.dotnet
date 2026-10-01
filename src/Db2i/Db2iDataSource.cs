@@ -22,6 +22,11 @@ public sealed class Db2iDataSource : DbDataSource
     public new Db2iConnection CreateConnection()
         => CreateDbConnection();
 
+    public new Db2iBatch CreateBatch() => (Db2iBatch)CreateDbBatch();
+
+    protected override DbBatch CreateDbBatch()
+        => new Db2iBatch(CreateDbConnection(), ownsConnection: true);
+
     public new Db2iConnection OpenConnection()
     {
         var connection = CreateDbConnection();

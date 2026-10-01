@@ -11,6 +11,102 @@ public sealed class RealIbmIIntegrationTests
     [Theory]
     [MemberData(nameof(ConfiguredConnections))]
     [Trait("Category", "Integration")]
+    public async Task ExecutesReadOnlyBatchesAgainstConfiguredIbmI(string environmentVariable)
+    {
+        var connectionString = Environment.GetEnvironmentVariable(environmentVariable);
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        await using var connection = new Db2iConnection(connectionString);
+        await connection.OpenAsync();
+        await using var batch = connection.CreateBatch();
+        var first = batch.BatchCommands.Add("VALUES CAST(? AS INTEGER)");
+        first.Parameters.Add("first", 7);
+        var second = batch.BatchCommands.Add("VALUES CAST(? AS INTEGER)");
+        second.Parameters.Add("second", 42);
+        await batch.PrepareAsync();
+
+        await using (var reader = await batch.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(7, reader.GetInt32(0));
+            Assert.True(await reader.NextResultAsync());
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(42, reader.GetInt32(0));
+            Assert.False(await reader.NextResultAsync());
+        }
+
+        first.Parameters[0].Value = 11;
+        Assert.Equal(11, await batch.ExecuteScalarAsync());
+        Assert.All(batch.BatchCommands, command => Assert.Equal(-1, command.RecordsAffected));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task RollsBackBatchDmlAgainstJournaledAuthorizedTable()
+    {
+        var configuration = GetDmlConfiguration();
+        if (configuration is null)
+        {
+            return;
+        }
+
+        await using var connection = new Db2iConnection(configuration.ConnectionString);
+        await connection.OpenAsync();
+        await AssertAuthorizedTableSignatureAsync(connection, configuration);
+        if (!await IsJournaledAsync(connection, configuration))
+        {
+            return;
+        }
+
+        var id = await FindUnusedIdAsync(connection, configuration);
+        var marker = $"DB2I_M4_BATCH_{Guid.NewGuid():N}";
+        try
+        {
+            await using (var transaction = await connection.BeginTransactionAsync())
+            {
+                await using var batch = new Db2iBatch(connection, (Db2iTransaction)transaction);
+                var insert = batch.BatchCommands.Add(
+                    $"INSERT INTO {configuration.Table} " +
+                    $"({configuration.IdColumn}, {configuration.DescriptionColumn}, " +
+                    $"{configuration.DateColumn}, {configuration.DecimalColumn}) VALUES (?, ?, ?, ?)");
+                insert.Parameters.Add("id", id);
+                insert.Parameters.Add("description", marker);
+                insert.Parameters.Add("date", 26024);
+                insert.Parameters.Add("value", 12.3456m);
+                var update = batch.BatchCommands.Add(
+                    $"UPDATE {configuration.Table} SET {configuration.DecimalColumn} = ? " +
+                    $"WHERE {configuration.IdColumn} = ? AND {configuration.DescriptionColumn} = ?");
+                update.Parameters.Add("value", 23.4567m);
+                update.Parameters.Add("id", id);
+                update.Parameters.Add("description", marker);
+
+                Assert.Equal(2, await batch.ExecuteNonQueryAsync());
+                Assert.All(batch.BatchCommands, command => Assert.Equal(1, command.RecordsAffected));
+                await transaction.RollbackAsync();
+            }
+
+            Assert.Equal(0, await CountByIdAsync(connection, configuration, id));
+        }
+        finally
+        {
+            if (connection.State == System.Data.ConnectionState.Open)
+            {
+                await using var cleanup = new Db2iCommand(
+                    $"DELETE FROM {configuration.Table} WHERE {configuration.IdColumn} = ? " +
+                    $"AND {configuration.DescriptionColumn} = ?", connection);
+                cleanup.Parameters.Add("id", id);
+                cleanup.Parameters.Add("description", marker);
+                _ = await cleanup.ExecuteNonQueryAsync();
+            }
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(ConfiguredConnections))]
+    [Trait("Category", "Integration")]
     public async Task OpensAndClosesAConfiguredIbmISystem(string environmentVariable)
     {
         var connectionString = Environment.GetEnvironmentVariable(environmentVariable);

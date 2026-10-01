@@ -1,6 +1,6 @@
 # Work status
 
-Last updated: July 29, 2026.
+Last updated: October 1, 2026.
 
 This file records the project's operational status. The roadmap defines the
 milestones; active implementation work is tracked here.
@@ -8,12 +8,17 @@ milestones; active implementation work is tracked here.
 ## Current status
 
 - Active milestone: **M4 — Application compatibility**.
-- Current phase: **M4.1 pooling and `DbDataSource`, completed and verified
-  against a real IBM i system**.
+- Current phase: **M4.2 sequential ADO.NET batching, implemented and tested
+  locally; real IBM i validation pending**.
 - Most recently completed milestone: **M3 — DML and transactions**,
   version `0.4.0-alpha.1`.
-- Current version: **`0.5.0-alpha.3`**.
-- Current verification: 104 Release tests passed; .NET 8 and .NET 10 builds;
+- Current package version: **`0.5.0-alpha.3`**; batching changes are unreleased.
+- Current verification: 148 Release tests passed and .NET 8/.NET 10 builds
+  succeeded. This includes 133 local tests (41 for batching) and 15 opt-in
+  integration cases that performed no external connections because the IBM i
+  environment variables were not configured. Real IBM i batching validation
+  remains pending.
+- Previous M4.1 verification: 104 Release tests passed; .NET 8 and .NET 10 builds;
   Integration category 12/12, including 11 real TCP cases covering queries,
   DML, transactions, job reuse, and rollback on pool return. The TLS case
   performs no connection because its environment variable is not configured.
@@ -28,6 +33,31 @@ milestones; active implementation work is tracked here.
 
 TLS against a real IBM i system still needs separate verification; this did not
 block M3.
+
+## M4.2 — Sequential ADO.NET batching
+
+- [x] Add `Db2iBatch`, `Db2iBatchCommand`, and the batch-command collection.
+- [x] Expose batches through `Db2iConnection`, `Db2iProviderFactory`, and
+  connectionless `Db2iDataSource` execution.
+- [x] Support per-command positional parameters, reusable preparation on an
+  explicit connection, and synchronous/asynchronous execution.
+- [x] Sum DML row counts, return the first query scalar, and stream multiple
+  query results through `NextResult`.
+- [x] Execute remaining commands on reader close/disposal, except after
+  failure or cancellation; keep `SchemaOnly` free of DML execution.
+- [x] Stop on the first error, identify `Db2iException.BatchCommand`, and
+  support explicit transactions, batch timeout, and cancellation.
+- [x] Cover batching behavior and lifecycle with local simulated-server tests.
+- [x] Add opt-in real batch query and transactional DML rollback tests.
+- [x] Update Source Link to `10.0.303` to address `GHSA-23fw-v26w-5fgq`.
+- [ ] Verify batching against a real IBM i system.
+- [ ] Release the batching implementation after validation.
+
+Batches execute sequentially without array binding or reduced network round
+trips. They do not start an implicit transaction: callers own explicit commit
+and rollback, and autocommit retains earlier successful commands on failure.
+Connectionless data-source batches do not support preparation or explicit
+transactions.
 
 ## M4.1 — Pooling and DbDataSource
 

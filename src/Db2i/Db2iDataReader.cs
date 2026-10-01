@@ -76,6 +76,9 @@ public sealed class Db2iDataReader : DbDataReader
     public override Task CloseAsync()
         => CloseCoreAsync(skipCursorClose: false).AsTask();
 
+    internal ValueTask CloseAfterConnectionChangeAsync()
+        => CloseCoreAsync(skipCursorClose: true);
+
     public override bool GetBoolean(int ordinal) => GetFieldValue<bool>(ordinal);
 
     public override byte GetByte(int ordinal) => GetFieldValue<byte>(ordinal);

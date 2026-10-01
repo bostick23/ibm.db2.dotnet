@@ -19,6 +19,12 @@ public sealed class Db2iProviderFactory : DbProviderFactory
 
     public override DbParameter CreateParameter() => new Db2iParameter();
 
+    public override bool CanCreateBatch => true;
+
+    public override DbBatch CreateBatch() => new Db2iBatch();
+
+    public override DbBatchCommand CreateBatchCommand() => new Db2iBatchCommand();
+
     public override DbDataSource CreateDataSource(string connectionString)
         => new Db2iDataSource(connectionString);
 }

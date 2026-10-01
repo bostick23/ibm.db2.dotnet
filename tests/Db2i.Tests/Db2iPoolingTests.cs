@@ -268,7 +268,8 @@ public sealed class Db2iPoolingTests
         Assert.Equal(2, await command.ExecuteNonQueryAsync());
 
         Assert.Equal(1, server.AcceptedConnectionCount);
-        Assert.Throws<NotSupportedException>(() => source.CreateBatch());
+        await using var batch = source.CreateBatch();
+        Assert.IsType<Db2iBatch>(batch);
     }
 
     private static Db2iConnection CreateConnection(

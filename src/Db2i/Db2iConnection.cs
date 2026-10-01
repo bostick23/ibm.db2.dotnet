@@ -296,6 +296,12 @@ public sealed class Db2iConnection : DbConnection
 
     protected override DbCommand CreateDbCommand() => new Db2iCommand { Connection = this };
 
+    public override bool CanCreateBatch => true;
+
+    public new Db2iBatch CreateBatch() => new(this);
+
+    protected override DbBatch CreateDbBatch() => CreateBatch();
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)

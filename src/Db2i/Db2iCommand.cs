@@ -498,7 +498,7 @@ public sealed class Db2iCommand : DbCommand
         return parameters;
     }
 
-    private (Db2iConnection Connection, Db2iSession Session) EnsureCanExecute()
+    internal (Db2iConnection Connection, Db2iSession Session) EnsureCanExecute()
     {
         lock (_syncRoot)
         {
@@ -566,7 +566,7 @@ public sealed class Db2iCommand : DbCommand
         }
     }
 
-    private static void ValidateBehavior(CommandBehavior behavior)
+    internal static void ValidateBehavior(CommandBehavior behavior)
     {
         const CommandBehavior supported =
             CommandBehavior.Default

@@ -17,6 +17,8 @@ built specifically for direct Db2 for IBM i connectivity on modern .NET.
 > `0.5.0-alpha.3` changes package identity and positioning only; the assembly,
 > namespaces, public API, and provider behavior are unchanged. Connection
 > pooling and `Db2iDataSource` have been verified against a real IBM i system.
+> The working tree adds sequential ADO.NET batching, covered by local tests;
+> real IBM i batching validation is still pending. These changes are unreleased.
 
 ## Why Db2i
 
@@ -110,6 +112,57 @@ await using var connection = await dataSource.OpenConnectionAsync();
 `DbDataSource.CreateCommand()` is supported. It automatically opens a pooled
 connection for each execution and returns it to the pool afterward.
 
+## Batching (unreleased)
+
+Use `Db2iBatch` to execute multiple statements in order on one connection.
+Each `Db2iBatchCommand` has its own positional parameters:
+
+```csharp
+await using var batch = connection.CreateBatch();
+var update = batch.CreateBatchCommand();
+update.CommandText = "update MYLIB.CUSTOMERS set STATUS = ? where CUSNUM = ?";
+update.Parameters.Add("status", "A");
+update.Parameters.Add("customer", 938472);
+batch.BatchCommands.Add(update);
+batch.BatchCommands.Add(new Db2iBatchCommand("select count(*) from MYLIB.CUSTOMERS"));
+
+var customerCount = await batch.ExecuteScalarAsync();
+```
+
+The provider factory also creates batches and batch commands.
+`Db2iDataSource.CreateBatch()` opens and returns a pooled connection for each
+execution; a reader holds that connection until it is closed. These
+connectionless batches support `CreateBatchCommand()`, but not `Prepare` or
+explicit transactions. A batch bound to an open connection supports reusable
+`Prepare`/`PrepareAsync` and explicit association through `batch.Transaction`.
+Each `Db2iBatchCommand` belongs to the first batch to which it is added, even
+after removal. Create a new command object for another batch. Collection and
+batch settings cannot be changed while execution or a reader is active.
+
+- `ExecuteNonQuery` sums DML affected-row counts, ignores query results, and
+  returns `-1` when there is no DML.
+- `ExecuteScalar` returns the first cell of the first query result, or `null`
+  if that result is empty, and still executes all remaining commands.
+- `ExecuteReader` streams query results; `NextResult` advances to the next
+  query, executing intervening DML. Closing or disposing a reader executes
+  remaining commands unless execution has failed or been canceled.
+- `SingleRow` and `SingleResult` restrict returned results, not execution of
+  subsequent commands. `SchemaOnly` executes no DML.
+
+Synchronous and asynchronous operations are supported. Execution stops on the
+first error; `Db2iException.BatchCommand` identifies the failing command.
+There is no implicit transaction: use an explicit transaction and commit it or
+roll it back yourself for atomicity. Under autocommit, earlier successful
+commands remain committed if a later command fails. Execution is sequential,
+without array binding or reduced network round trips.
+
+`batch.Timeout` covers the whole non-query, scalar, preparation, or initial
+reader operation. Each subsequent `Read`, `NextResult`, or `Close` starts a
+fresh timeout; time spent idle between reader calls is excluded. Zero disables
+the timeout. `Cancel()` cancels the active batch operation.
+Closing and reopening the connection invalidates an existing batch reader;
+pending statements are never resumed on the replacement session.
+
 ## Architecture
 
 The provider uses the IBM i database host server rather than DRDA:
@@ -166,7 +219,10 @@ Responsibilities are separated as follows:
 - [x] global connection pools and dedicated `Db2iDataSource` pools;
 - [x] `DbProviderFactory.CreateDataSource`, pool clearing, and safe session
   reset;
-- [ ] LOBs, stored procedures, output parameters, and batching.
+- [x] sequential `DbBatch`, per-command parameters, multiple query results,
+  preparation, timeout, and cancellation (unreleased; local validation only);
+- [ ] real IBM i batching validation;
+- [ ] LOBs, stored procedures, and output parameters.
 
 Acceptance criteria are tracked in [docs/roadmap.md](docs/roadmap.md).
 Current work and operational status are tracked in [TODO.md](TODO.md).
@@ -232,7 +288,7 @@ draining fails, the connection is closed for safety.
 `ReadUncommitted`, `ReadCommitted`, `RepeatableRead`, and `Serializable` are
 supported; `Unspecified` uses `ReadCommitted`. Tables must be journaled on
 IBM i to use commitment control. `Chaos`, `Snapshot`,
-`CommandType.StoredProcedure`, `CALL`, batching, savepoints, distributed
+`CommandType.StoredProcedure`, `CALL`, savepoints, distributed
 transactions, and non-input parameters are not supported.
 
 ## Testing against IBM i
@@ -262,9 +318,14 @@ the tests verify a four-column signature (`DECIMAL(5,0)`, `CHAR(100)`,
 Transaction tests also verify journaling before writing. Credentials and
 identifiers from a real environment must never be stored in the project.
 
-M4 tests add reuse of the same IBM i job and rollback before a session returns
+M4.1 tests add reuse of the same IBM i job and rollback before a session returns
 to the pool. Both behaviors were verified against a real IBM i system on
 July 29, 2026.
+
+M4.2 batching is covered locally with the simulated host server. Its real
+IBM i validation remains pending.
+Opt-in batch tests cover prepared queries with multiple result sets over
+TCP/TLS and transactional DML rollback on the authorized journaled table.
 
 ## Provenance and license
 

@@ -54,6 +54,10 @@ public sealed class Db2iException : DbException
 
     public override bool IsTransient => IsTransientValue;
 
+    internal Db2iBatchCommand? FailedBatchCommand { get; set; }
+
+    protected override DbBatchCommand? DbBatchCommand => FailedBatchCommand;
+
     private string? SqlStateValue { get; }
 
     private bool IsTransientValue { get; }

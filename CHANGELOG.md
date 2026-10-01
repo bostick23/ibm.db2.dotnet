@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- sequential ADO.NET batching through `Db2iBatch`, `Db2iBatchCommand`, the
+  batch-command collection, connections, the provider factory, and
+  `Db2iDataSource`;
+- per-command positional parameters, reusable preparation on explicit
+  connections, synchronous/asynchronous DML and scalar execution, and
+  streaming query results through `NextResult`;
+- batch timeout and cancellation, explicit transaction association, and
+  `Db2iException.BatchCommand` attribution for the first failing command;
+- local simulated-server tests for batching behavior and lifecycle.
+
+### Changed
+
+- updated Source Link to `10.0.303` to address `GHSA-23fw-v26w-5fgq`.
+
+### Batching limitations
+
+- real IBM i batching validation is pending;
+- execution is sequential, with no array binding, reduced network round trips,
+  or implicit transaction; callers manage explicit commit/rollback, and prior
+  autocommit commands remain committed on failure;
+- closing or disposing a reader executes remaining commands unless the batch
+  has failed or been canceled; `SingleRow` and `SingleResult` limit returned
+  results, while `SchemaOnly` executes no DML;
+- connectionless data-source batches do not support preparation or explicit
+  transactions; LOBs, stored procedures, and output parameters remain
+  unsupported.
+
 ## [0.5.0-alpha.3] - 2026-07-29
 
 Package-identity and positioning follow-up to `0.5.0-alpha.2`. Provider

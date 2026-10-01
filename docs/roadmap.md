@@ -70,11 +70,20 @@ Implementation available in `0.4.0-alpha.1`:
 - [x] global pooling with capacity, timeout, reset, and clear operations;
 - [x] `DbDataSource` with a dedicated pool and `DbProviderFactory` support;
 - [x] real IBM i TCP and transactional pooling verification;
-- [ ] batching;
+- [x] sequential ADO.NET batching with per-command parameters, preparation,
+  multiple query results, timeout, and cancellation (M4.2, unreleased);
+- [ ] real IBM i batching validation;
 - [ ] LOBs and locators;
 - [ ] stored procedures and output parameters;
 - [ ] metadata/schema;
 - [ ] Dapper integration and, separately, an EF Core provider.
+
+M4.2 is implemented and tested locally with the simulated host server. Batches
+are available through connections, the provider factory, and `Db2iDataSource`.
+They stop on the first error and require a caller-managed explicit transaction
+for atomicity. This phase provides ADO.NET compatibility through sequential
+execution; it does not reduce network round trips or implement array binding.
+Real IBM i validation and release remain pending.
 
 ## Deferred decisions
 
