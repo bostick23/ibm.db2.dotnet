@@ -185,7 +185,7 @@ public sealed class Db2iBatch : DbBatch
                 {
                     if (scalar && firstResult && await reader.ReadCoreAsync(token).ConfigureAwait(false))
                     {
-                        value = reader.GetValue(0);
+                        value = await reader.GetValueCoreAsync(0, token).ConfigureAwait(false);
                     }
 
                     firstResult = false;

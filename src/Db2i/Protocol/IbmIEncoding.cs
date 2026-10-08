@@ -11,6 +11,11 @@ internal static class IbmIEncoding
 
     internal static Encoding Get(int ccsid)
     {
+        if (ccsid == 1208)
+        {
+            return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+        }
+
         if (ccsid is 1200 or 13488)
         {
             return new UnicodeEncoding(

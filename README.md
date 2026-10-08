@@ -14,11 +14,10 @@ best of our knowledge, it is currently the only open-source ADO.NET provider
 built specifically for direct Db2 for IBM i connectivity on modern .NET.
 
 > Status: **pre-alpha**. The NuGet package ID is `Db2i.AdoNet`.
-> `0.5.0-alpha.3` changes package identity and positioning only; the assembly,
-> namespaces, public API, and provider behavior are unchanged. Connection
-> pooling and `Db2iDataSource` have been verified against a real IBM i system.
-> The working tree adds sequential ADO.NET batching, covered by local tests;
-> real IBM i batching validation is still pending. These changes are unreleased.
+> `0.5.0-alpha.4` adds sequential ADO.NET batching and streaming LOB support,
+> covered by local tests. Pooling, `Db2iDataSource`, and read-only TCP batching
+> have been verified against a real IBM i system. Real LOB, transactional batch,
+> and TLS verification remain pending.
 
 ## Why Db2i
 
@@ -112,7 +111,7 @@ await using var connection = await dataSource.OpenConnectionAsync();
 `DbDataSource.CreateCommand()` is supported. It automatically opens a pooled
 connection for each execution and returns it to the pool afterward.
 
-## Batching (unreleased)
+## Batching
 
 Use `Db2iBatch` to execute multiple statements in order on one connection.
 Each `Db2iBatchCommand` has its own positional parameters:
@@ -162,6 +161,76 @@ fresh timeout; time spent idle between reader calls is excluded. Zero disables
 the timeout. `Cancel()` cancels the active batch operation.
 Closing and reopening the connection invalidates an existing batch reader;
 pending statements are never resumed on the replacement session.
+
+## LOB streaming
+
+`BLOB`, `CLOB`, and `DBCLOB` values use server locators and 64 KiB transfer
+blocks. `GetStream` and `GetTextReader` support synchronous and asynchronous
+reads without loading the entire value into memory:
+
+```csharp
+await using var command = new Db2iCommand(
+    "select BLOB_VALUE, CLOB_VALUE from MYLIB.DOCUMENTS where ID = ?", connection);
+command.Parameters.Add("id", documentId);
+await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess);
+if (await reader.ReadAsync())
+{
+    await using (var blob = reader.GetStream(0))
+    {
+        await blob.CopyToAsync(destinationStream, cancellationToken);
+    }
+    using var text = reader.GetTextReader(1);
+    var buffer = new char[16 * 1024];
+    int count;
+    while ((count = await text.ReadAsync(buffer.AsMemory(), cancellationToken)) != 0)
+    {
+        await destinationWriter.WriteAsync(buffer.AsMemory(0, count), cancellationToken);
+    }
+}
+```
+
+Only one value stream is active per reader. Opening another value accessor,
+advancing the row or result, or closing the reader invalidates it. Streams do
+not support seeking. `SequentialAccess` also rejects backward column access
+and backward `GetBytes`/`GetChars` offsets. Character offsets count .NET UTF-16
+characters; decoding preserves multibyte characters, surrogate pairs across
+blocks, and trailing spaces. Column metadata reports the LOB type, maximum
+size, and `IsLong`.
+
+`GetBytes` and `GetChars` support partial reads. `GetValue`, `GetString`, and
+`GetFieldValueAsync<byte[]/string>` materialize values only up to 64 MiB of
+managed content (32 Mi characters for a .NET string). Larger values require
+streaming; this materialization limit does not restrict chunked transfers.
+
+For inputs, use `byte[]` or a readable `Stream` for BLOB, and `string` or
+`TextReader` for CLOB/DBCLOB. The server's parameter descriptor determines the
+LOB type, with no additional public enum. An ambiguous marker needs an
+explicit SQL cast, for example `CAST(? AS BLOB(20M))`:
+
+```csharp
+await using var insert = new Db2iCommand(
+    "insert into MYLIB.DOCUMENTS (ID, BLOB_VALUE, CLOB_VALUE) values (?, ?, ?)", connection);
+insert.Parameters.Add("id", documentId);
+insert.Parameters.Add("binary", sourceStream);
+insert.Parameters.Add("text", sourceTextReader);
+await insert.PrepareAsync(); // Does not read either input.
+await insert.ExecuteNonQueryAsync(cancellationToken);
+```
+
+Inputs are read from their current position and remain open. Before executing
+again, reposition or replace consumed inputs. `Size=0` reads to EOF; a positive
+size limits bytes for BLOB or .NET characters for text. Exceeding it throws
+instead of silently truncating. Each execution completely replaces previous
+locator contents, including shorter and empty values. An incomplete upload or
+transaction boundary invalidates LOB preparation and obtains fresh descriptors
+on the next execution.
+
+LOBs work with single commands, batches, explicit transactions, and
+`Db2iDataSource`. Getter and stream reads participate in command/batch timeout
+and cancellation; a batch error retains its `BatchCommand`. The cursor stays
+open while its locators are needed, unread block locators are released on
+advance or close, and sessions with uncertain cleanup are discarded from the
+pool.
 
 ## Architecture
 
@@ -220,9 +289,12 @@ Responsibilities are separated as follows:
 - [x] `DbProviderFactory.CreateDataSource`, pool clearing, and safe session
   reset;
 - [x] sequential `DbBatch`, per-command parameters, multiple query results,
-  preparation, timeout, and cancellation (unreleased; local validation only);
+  preparation, timeout, and cancellation;
 - [ ] real IBM i batching validation;
-- [ ] LOBs, stored procedures, and output parameters.
+- [x] BLOB/CLOB/DBCLOB locators, streaming input/output, and bounded
+  materialization (local validation only);
+- [ ] real IBM i LOB validation;
+- [ ] stored procedures and output parameters.
 
 Acceptance criteria are tracked in [docs/roadmap.md](docs/roadmap.md).
 Current work and operational status are tracked in [TODO.md](TODO.md).
@@ -237,6 +309,11 @@ dotnet pack src/Db2i/Db2i.csproj --configuration Release
 ```
 
 The library targets both `net8.0` and `net10.0`.
+
+NuGet publication starts when a GitHub Release is published from a verified
+`main` commit. It uses OIDC Trusted Publishing, with no permanent API key.
+See [the release guide](docs/nuget-release.md) for initial setup, version/tag
+checks, and retry instructions.
 
 ## Connection string
 
@@ -322,10 +399,28 @@ M4.1 tests add reuse of the same IBM i job and rollback before a session returns
 to the pool. Both behaviors were verified against a real IBM i system on
 July 29, 2026.
 
-M4.2 batching is covered locally with the simulated host server. Its real
-IBM i validation remains pending.
+M4.2 batching is covered locally with the simulated host server. Read-only
+batching was also verified over real TCP; transactional verification remains pending.
 Opt-in batch tests cover prepared queries with multiple result sets over
 TCP/TLS and transactional DML rollback on the authorized journaled table.
+
+M4.3 LOB validation is also opt-in and remains pending on real IBM i. It uses
+the existing TCP connection setting plus:
+
+```powershell
+$env:DB2I_TEST_LOB_ENABLED = "true"
+$env:DB2I_TEST_LOB_TABLE = "MYLIB.DB2I_LOB_TEST"
+dotnet test Db2i.sln --configuration Release --filter FullyQualifiedName~RealIbmILobIntegrationTests
+```
+
+Provide a dedicated, journaled table with exactly these columns in order:
+`ID` (`CHAR` or `VARCHAR`, at least 32 characters), `BLOB_VALUE` (`BLOB`, at
+least 18 MiB), `CLOB_VALUE` (`CLOB`, at least 128 KiB), and `DBCLOB_VALUE`
+(`DBCLOB`, at least 128 Ki characters, Unicode CCSID 1200 or 13488). The test
+verifies the signature and journaling before writing, uses a unique ID,
+transfers a BLOB larger than one protocol packet through a prepared batch,
+checks streamed text and rollback, and cleans up its rows. It never creates
+the table. Leave the LOB flag unset to avoid these writes.
 
 ## Provenance and license
 

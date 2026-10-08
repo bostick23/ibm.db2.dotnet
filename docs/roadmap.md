@@ -71,9 +71,12 @@ Implementation available in `0.4.0-alpha.1`:
 - [x] `DbDataSource` with a dedicated pool and `DbProviderFactory` support;
 - [x] real IBM i TCP and transactional pooling verification;
 - [x] sequential ADO.NET batching with per-command parameters, preparation,
-  multiple query results, timeout, and cancellation (M4.2, unreleased);
+  multiple query results, timeout, and cancellation (M4.2, `0.5.0-alpha.4`);
 - [ ] real IBM i batching validation;
-- [ ] LOBs and locators;
+- [x] BLOB/CLOB/DBCLOB locators with 64 KiB streaming input/output, partial
+  getters, bounded materialization, and command/batch lifetime support (M4.3,
+  `0.5.0-alpha.4`);
+- [ ] real IBM i LOB validation;
 - [ ] stored procedures and output parameters;
 - [ ] metadata/schema;
 - [ ] Dapper integration and, separately, an EF Core provider.
@@ -83,7 +86,19 @@ are available through connections, the provider factory, and `Db2iDataSource`.
 They stop on the first error and require a caller-managed explicit transaction
 for atomicity. This phase provides ADO.NET compatibility through sequential
 execution; it does not reduce network round trips or implement array binding.
-Real IBM i validation and release remain pending.
+Read-only TCP batching has been verified. Transactional batching verification
+remains pending; `0.5.0-alpha.4` prepares the prerelease package.
+
+M4.3 adds synchronous/asynchronous LOB reads and `Stream`/`TextReader` input
+parameters inferred from server descriptors. Local tests cover wire vectors,
+multibyte text, parameter reuse, cancellation, timeout, transaction changes,
+pool cleanup, and multiple batch results. Real verification requires an
+explicitly enabled dedicated journaled table; it remains pending, together
+with the separate M4.2 transactional batching verification.
+
+Releases publish through GitHub Actions and NuGet Trusted Publishing. The
+[release guide](nuget-release.md) documents the one-time policy/environment
+setup and release-tag workflow.
 
 ## Deferred decisions
 

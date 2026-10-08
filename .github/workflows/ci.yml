@@ -30,6 +30,9 @@ jobs:
       - name: Restore
         run: dotnet restore Db2i.sln
 
+      - name: Test release validation gates
+        run: python3 -m unittest discover -s tests/release -v
+
       - name: Test
         run: dotnet test Db2i.sln --configuration Release --no-restore
 

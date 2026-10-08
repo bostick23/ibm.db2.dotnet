@@ -44,6 +44,10 @@ internal static class DatabaseProtocol
         builder.AddInt16(0x3811, 1);
         builder.AddByte(0x3821, 0xF2);
         builder.AddInt32(0x3825, 0x40000000);
+        // JTOpen AS400JDBCConnectionImpl: return all LOBs as locators and
+        // retain cursors at EOF until their result locators have been consumed.
+        builder.AddInt32(0x3822, 0);
+        builder.AddByte(0x383F, 0xD5);
 
         if (!string.IsNullOrEmpty(settings.Database))
         {

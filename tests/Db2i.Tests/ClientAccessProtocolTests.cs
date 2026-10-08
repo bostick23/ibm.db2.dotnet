@@ -129,7 +129,7 @@ public sealed class ClientAccessProtocolTests
         Assert.Equal(
             DatabaseProtocol.ReturnData | DatabaseProtocol.ServerAttributes,
             BinaryPrimitives.ReadInt32BigEndian(request.AsSpan(20, 4)));
-        Assert.Equal(18, BinaryPrimitives.ReadUInt16BigEndian(request.AsSpan(38, 2)));
+        Assert.Equal(20, BinaryPrimitives.ReadUInt16BigEndian(request.AsSpan(38, 2)));
         Assert.NotNull(ClientAccessCodePoints.Find(request, 40, 0x3801));
         Assert.NotNull(ClientAccessCodePoints.Find(request, 40, 0x3807));
         Assert.NotNull(ClientAccessCodePoints.Find(request, 40, 0x3809));

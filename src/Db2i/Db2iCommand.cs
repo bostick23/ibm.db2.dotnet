@@ -175,10 +175,11 @@ public sealed class Db2iCommand : DbCommand
         EnsureStatementKind(Db2iStatementKind.NonQuery, nameof(ExecuteNonQuery));
         using var operation = CreateOperationCancellation(cancellationToken);
         Db2iSessionLease? lease = null;
+        Db2iPreparedStatement? statement = null;
         try
         {
             lease = await session.AcquireOperationAsync(operation.Token).ConfigureAwait(false);
-            var statement = await EnsurePreparedAsync(session, operation.Token).ConfigureAwait(false);
+            statement = await EnsurePreparedAsync(session, operation.Token).ConfigureAwait(false);
             var parameters = await PrepareParametersAsync(
                     session,
                     statement,
@@ -192,18 +193,26 @@ public sealed class Db2iCommand : DbCommand
         }
         catch (OperationCanceledException exception)
         {
-            await HandleCancellationAsync(connection, cancellationToken, operation, exception)
+            statement?.InvalidateLobPreparation();
+            await HandleCancellationAsync(connection, cancellationToken, operation, exception, session)
                 .ConfigureAwait(false);
             throw;
         }
         catch (Exception exception) when (IsBrokenStream(exception))
         {
-            await connection.AbortCommandAsync().ConfigureAwait(false);
+            await AbortOriginalSessionAsync(connection, session).ConfigureAwait(false);
             throw CreateConnectionException(exception);
         }
         finally
         {
-            lease?.Dispose();
+            try
+            {
+                if (lease is not null)
+                {
+                    await CleanupInvalidatedLobStatementAsync(connection, statement).ConfigureAwait(false);
+                }
+            }
+            finally { lease?.Dispose(); }
         }
     }
 
@@ -217,7 +226,7 @@ public sealed class Db2iCommand : DbCommand
                 cancellationToken)
             .ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-            ? reader.GetValue(0)
+            ? await reader.GetValueAsync(0, cancellationToken).ConfigureAwait(false)
             : null;
     }
 
@@ -236,13 +245,13 @@ public sealed class Db2iCommand : DbCommand
         }
         catch (OperationCanceledException exception)
         {
-            await HandleCancellationAsync(connection, cancellationToken, operation, exception)
+            await HandleCancellationAsync(connection, cancellationToken, operation, exception, session)
                 .ConfigureAwait(false);
             throw;
         }
         catch (Exception exception) when (IsBrokenStream(exception))
         {
-            await connection.AbortCommandAsync().ConfigureAwait(false);
+            await AbortOriginalSessionAsync(connection, session).ConfigureAwait(false);
             throw CreateConnectionException(exception);
         }
         finally
@@ -362,14 +371,16 @@ public sealed class Db2iCommand : DbCommand
         EnsureStatementKind(Db2iStatementKind.Query, nameof(ExecuteReader));
         using var operation = CreateOperationCancellation(cancellationToken);
         Db2iSessionLease? lease = null;
+        Db2iPreparedStatement? statement = null;
         try
         {
             lease = await session.AcquireOperationAsync(operation.Token).ConfigureAwait(false);
-            var statement = await EnsurePreparedAsync(session, operation.Token).ConfigureAwait(false);
+            statement = await EnsurePreparedAsync(session, operation.Token).ConfigureAwait(false);
             var parameters = await PrepareParametersAsync(
                     session,
                     statement,
-                    operation.Token)
+                    operation.Token,
+                    uploadLobs: (behavior & CommandBehavior.SchemaOnly) == 0)
                 .ConfigureAwait(false);
             var resultFormat = statement.ResultFormat
                 ?? throw new InvalidOperationException(
@@ -413,18 +424,51 @@ public sealed class Db2iCommand : DbCommand
         }
         catch (OperationCanceledException exception)
         {
-            await HandleCancellationAsync(connection, cancellationToken, operation, exception)
+            statement?.InvalidateLobPreparation();
+            await HandleCancellationAsync(connection, cancellationToken, operation, exception, session)
                 .ConfigureAwait(false);
             throw;
         }
         catch (Exception exception) when (IsBrokenStream(exception))
         {
-            await connection.AbortCommandAsync().ConfigureAwait(false);
+            await AbortOriginalSessionAsync(connection, session).ConfigureAwait(false);
             throw CreateConnectionException(exception);
         }
         finally
         {
-            lease?.Dispose();
+            try
+            {
+                if (lease is not null)
+                {
+                    await CleanupInvalidatedLobStatementAsync(connection, statement).ConfigureAwait(false);
+                }
+            }
+            finally { lease?.Dispose(); }
+        }
+    }
+
+    private static async ValueTask CleanupInvalidatedLobStatementAsync(
+        Db2iConnection connection, Db2iPreparedStatement? statement)
+    {
+        if (statement is not { IsInvalidated: true } || connection.State != ConnectionState.Open
+            || !ReferenceEquals(connection.GetOpenSession(), statement.Session))
+        {
+            return;
+        }
+
+        using var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        try
+        {
+            await statement.Session.DeleteStatementAsync(statement, cleanupTimeout.Token).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Preserve the original error but never return an uncertain session to the pool.
+            if (connection.State == ConnectionState.Open
+                && ReferenceEquals(connection.GetOpenSession(), statement.Session))
+            {
+                await connection.AbortCommandAsync().ConfigureAwait(false);
+            }
         }
     }
 
@@ -439,7 +483,8 @@ public sealed class Db2iCommand : DbCommand
             if (existing is not null
                 && ReferenceEquals(existing.Session, session)
                 && string.Equals(existing.CommandText, _commandText, StringComparison.Ordinal)
-                && !existing.IsDeleted)
+                && !existing.IsDeleted
+                && !existing.IsInvalidated)
             {
                 return existing;
             }
@@ -471,10 +516,11 @@ public sealed class Db2iCommand : DbCommand
     private async ValueTask<Db2iParameter[]> PrepareParametersAsync(
         Db2iSession session,
         Db2iPreparedStatement statement,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool uploadLobs = true)
     {
         var parameters = _parameters.Cast<Db2iParameter>().ToArray();
-        var serverParameterCount = statement.ParameterFormat?.Fields.Count ?? 0;
+        var serverParameterCount = statement.ServerParameterFormat?.Fields.Count ?? 0;
         if (serverParameterCount != parameters.Length)
         {
             throw new InvalidOperationException(
@@ -485,7 +531,7 @@ public sealed class Db2iCommand : DbCommand
         if (parameters.Length > 0)
         {
             var parameterFormat = SqlProtocol.ResolveParameterFormat(
-                statement.ParameterFormat,
+                statement.ServerParameterFormat,
                 parameters,
                 session.ServerInfo.Ccsid);
             await session.ChangeParameterDescriptorAsync(
@@ -493,6 +539,11 @@ public sealed class Db2iCommand : DbCommand
                     parameterFormat,
                     cancellationToken)
                 .ConfigureAwait(false);
+            if (uploadLobs)
+            {
+                await Db2iLobUploader.UploadAsync(session, statement, parameters, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
 
         return parameters;
@@ -589,9 +640,11 @@ public sealed class Db2iCommand : DbCommand
         Db2iConnection connection,
         CancellationToken callerToken,
         OperationCancellation operation,
-        OperationCanceledException exception)
+        OperationCanceledException exception,
+        Db2iSession? originalSession = null)
     {
-        var synchronized = await connection.CancelPendingOperationAsync().ConfigureAwait(false);
+        var synchronized = (originalSession is null || IsCurrentSession(connection, originalSession))
+            && await connection.CancelPendingOperationAsync().ConfigureAwait(false);
         if (callerToken.IsCancellationRequested)
         {
             throw new OperationCanceledException(
@@ -623,6 +676,17 @@ public sealed class Db2iCommand : DbCommand
         }
     }
 
+    private static bool IsCurrentSession(Db2iConnection connection, Db2iSession session)
+        => connection.State == ConnectionState.Open && ReferenceEquals(connection.GetOpenSession(), session);
+
+    private static async ValueTask AbortOriginalSessionAsync(Db2iConnection connection, Db2iSession session)
+    {
+        if (IsCurrentSession(connection, session))
+        {
+            await connection.AbortCommandAsync().ConfigureAwait(false);
+        }
+    }
+
     private static bool IsBrokenStream(Exception exception)
         => exception is IOException or SocketException or ObjectDisposedException;
 
@@ -649,10 +713,11 @@ public sealed class Db2iCommand : DbCommand
             return;
         }
 
+        using var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         try
         {
             using var lease = statement.Session.AcquireOperation();
-            statement.Session.DeleteStatementAsync(statement, CancellationToken.None)
+            statement.Session.DeleteStatementAsync(statement, cleanupTimeout.Token)
                 .AsTask()
                 .GetAwaiter()
                 .GetResult();
@@ -661,6 +726,7 @@ public sealed class Db2iCommand : DbCommand
             when (exception is InvalidOperationException
                 or ObjectDisposedException
                 or IOException
+                or OperationCanceledException
                 or SocketException)
         {
             statement.MarkDeleted();
@@ -670,18 +736,20 @@ public sealed class Db2iCommand : DbCommand
     private static async ValueTask DeleteStatementBestEffortAsync(
         Db2iPreparedStatement statement)
     {
+        using var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         try
         {
             await using var lease = await statement.Session
-                .AcquireOperationAsync(CancellationToken.None)
+                .AcquireOperationAsync(cleanupTimeout.Token)
                 .ConfigureAwait(false);
-            await statement.Session.DeleteStatementAsync(statement, CancellationToken.None)
+            await statement.Session.DeleteStatementAsync(statement, cleanupTimeout.Token)
                 .ConfigureAwait(false);
         }
         catch (Exception exception)
             when (exception is InvalidOperationException
                 or ObjectDisposedException
                 or IOException
+                or OperationCanceledException
                 or SocketException)
         {
             statement.MarkDeleted();

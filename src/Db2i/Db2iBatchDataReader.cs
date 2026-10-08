@@ -16,6 +16,7 @@ internal sealed class Db2iBatchDataReader(
     private int _nextCommand;
     private int _recordsAffected = -1;
     private bool _closed;
+    private long _rowGeneration;
 
     private DbDataReader Current
     {
@@ -26,40 +27,84 @@ internal sealed class Db2iBatchDataReader(
         }
     }
 
-    public override object this[int ordinal] => Current[ordinal];
-    public override object this[string name] => Current[name];
+    public override object this[int ordinal] => GetValue(ordinal);
+    public override object this[string name] => GetValue(GetOrdinal(name));
     public override int Depth => 0;
     public override int FieldCount => _current?.FieldCount ?? 0;
     public override int VisibleFieldCount => _current?.VisibleFieldCount ?? 0;
     public override bool HasRows => _current?.HasRows ?? false;
     public override bool IsClosed => _closed;
     public override int RecordsAffected => _recordsAffected;
-    public override bool GetBoolean(int ordinal) => Current.GetBoolean(ordinal);
-    public override byte GetByte(int ordinal) => Current.GetByte(ordinal);
+    public override bool GetBoolean(int ordinal) => GetFieldValue<bool>(ordinal);
+    public override byte GetByte(int ordinal) => GetFieldValue<byte>(ordinal);
     public override long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length)
-        => Current.GetBytes(ordinal, dataOffset, buffer, bufferOffset, length);
-    public override char GetChar(int ordinal) => Current.GetChar(ordinal);
+        => RunReaderOperationAsync(token => ((Db2iDataReader)Current).GetBytesAsync(
+            ordinal, dataOffset, buffer, bufferOffset, length, token), CancellationToken.None)
+            .GetAwaiter().GetResult();
+    public override char GetChar(int ordinal) => GetFieldValue<char>(ordinal);
     public override long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
-        => Current.GetChars(ordinal, dataOffset, buffer, bufferOffset, length);
+        => RunReaderOperationAsync(token => ((Db2iDataReader)Current).GetCharsAsync(
+            ordinal, dataOffset, buffer, bufferOffset, length, token), CancellationToken.None)
+            .GetAwaiter().GetResult();
     public override string GetDataTypeName(int ordinal) => Current.GetDataTypeName(ordinal);
-    public override DateTime GetDateTime(int ordinal) => Current.GetDateTime(ordinal);
-    public override decimal GetDecimal(int ordinal) => Current.GetDecimal(ordinal);
-    public override double GetDouble(int ordinal) => Current.GetDouble(ordinal);
+    public override DateTime GetDateTime(int ordinal) => GetFieldValue<DateTime>(ordinal);
+    public override decimal GetDecimal(int ordinal) => GetFieldValue<decimal>(ordinal);
+    public override double GetDouble(int ordinal) => GetFieldValue<double>(ordinal);
     public override Type GetFieldType(int ordinal) => Current.GetFieldType(ordinal);
-    public override float GetFloat(int ordinal) => Current.GetFloat(ordinal);
-    public override Guid GetGuid(int ordinal) => Current.GetGuid(ordinal);
-    public override short GetInt16(int ordinal) => Current.GetInt16(ordinal);
-    public override int GetInt32(int ordinal) => Current.GetInt32(ordinal);
-    public override long GetInt64(int ordinal) => Current.GetInt64(ordinal);
+    public override float GetFloat(int ordinal) => GetFieldValue<float>(ordinal);
+    public override Guid GetGuid(int ordinal) => GetFieldValue<Guid>(ordinal);
+    public override short GetInt16(int ordinal) => GetFieldValue<short>(ordinal);
+    public override int GetInt32(int ordinal) => GetFieldValue<int>(ordinal);
+    public override long GetInt64(int ordinal) => GetFieldValue<long>(ordinal);
     public override string GetName(int ordinal) => Current.GetName(ordinal);
     public override int GetOrdinal(string name) => Current.GetOrdinal(name);
-    public override string GetString(int ordinal) => Current.GetString(ordinal);
-    public override object GetValue(int ordinal) => Current.GetValue(ordinal);
-    public override int GetValues(object[] values) => Current.GetValues(values);
+    public override string GetString(int ordinal) => GetFieldValue<string>(ordinal);
+    public override object GetValue(int ordinal)
+        => RunReaderOperationAsync(token => GetValueCoreAsync(ordinal, token), CancellationToken.None)
+            .GetAwaiter().GetResult();
+    internal Task<object> GetValueCoreAsync(int ordinal, CancellationToken token)
+        => ((Db2iDataReader)Current).GetValueAsync(ordinal, token);
+    public override int GetValues(object[] values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        var count = Math.Min(values.Length, Current.FieldCount);
+        for (var index = 0; index < count; index++) { values[index] = GetValue(index); }
+        return count;
+    }
     public override bool IsDBNull(int ordinal) => Current.IsDBNull(ordinal);
-    public override T GetFieldValue<T>(int ordinal) => Current.GetFieldValue<T>(ordinal);
+    public override T GetFieldValue<T>(int ordinal)
+        => GetFieldValueAsync<T>(ordinal, CancellationToken.None).GetAwaiter().GetResult();
     public override Task<T> GetFieldValueAsync<T>(int ordinal, CancellationToken cancellationToken)
-        => Current.GetFieldValueAsync<T>(ordinal, cancellationToken);
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (typeof(T) == typeof(Stream)) { return Task.FromResult((T)(object)GetStream(ordinal)); }
+        if (typeof(T) == typeof(TextReader)) { return Task.FromResult((T)(object)GetTextReader(ordinal)); }
+        return RunReaderOperationAsync(token => Current.GetFieldValueAsync<T>(ordinal, token), cancellationToken);
+    }
+    public override Stream GetStream(int ordinal)
+    {
+        var reader = Current;
+        var generation = _rowGeneration;
+        return new Db2iBatchLobStream(reader.GetStream(ordinal),
+            (action, token) => RunLobReadAsync(reader, generation, action, token));
+    }
+    public override TextReader GetTextReader(int ordinal)
+    {
+        var reader = Current;
+        var generation = _rowGeneration;
+        return new Db2iBatchLobTextReader(reader.GetTextReader(ordinal),
+            (action, token) => RunLobReadAsync(reader, generation, action, token));
+    }
+    private Task<int> RunLobReadAsync(DbDataReader reader, long generation,
+        Func<CancellationToken, Task<int>> action, CancellationToken token)
+    {
+        EnsureOpen();
+        if (!ReferenceEquals(_current, reader) || generation != _rowGeneration)
+        {
+            throw new InvalidOperationException("Lo stream appartiene a una riga o a un risultato precedente.");
+        }
+        return RunReaderOperationAsync(action, token);
+    }
     public override Task<bool> IsDBNullAsync(int ordinal, CancellationToken cancellationToken)
         => Current.IsDBNullAsync(ordinal, cancellationToken);
     public override DataTable? GetSchemaTable()
@@ -78,6 +123,7 @@ internal sealed class Db2iBatchDataReader(
     {
         token.ThrowIfCancellationRequested();
         batch.ValidateExecutionSession();
+        _rowGeneration++;
         return _current is not null && await _current.ReadAsync(token).ConfigureAwait(false);
     }
 
@@ -99,7 +145,7 @@ internal sealed class Db2iBatchDataReader(
     {
         token.ThrowIfCancellationRequested();
         batch.ValidateExecutionSession();
-        await CloseCurrentAsync().ConfigureAwait(false);
+        await CloseCurrentAsync(token).ConfigureAwait(false);
         while (_nextCommand < commands.Length)
         {
             token.ThrowIfCancellationRequested();
@@ -131,19 +177,31 @@ internal sealed class Db2iBatchDataReader(
         return false;
     }
 
-    private async Task<bool> RunReaderOperationAsync(Func<CancellationToken, Task<bool>> action, CancellationToken token)
+    private async Task<T> RunReaderOperationAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken token)
     {
         EnsureOpen();
         // Admission can fail while another operation owns the cursor. Only the
         // admitted operation may close it and release the batch on failure.
-        var operation = batch.RunOperationAsync(action, token);
+        var operation = batch.RunOperationAsync(ct =>
+        {
+            batch.ValidateExecutionSession();
+            return action(ct);
+        }, token);
         try
         {
             return await operation.ConfigureAwait(false);
         }
         catch
         {
-            await AbortAsync().ConfigureAwait(false);
+            try
+            {
+                await AbortAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // Locator cleanup already quarantines its session. Preserve the
+                // original command error and its BatchCommand attribution.
+            }
             throw;
         }
     }
@@ -182,8 +240,9 @@ internal sealed class Db2iBatchDataReader(
         }
     }
 
-    private async ValueTask CloseCurrentAsync()
+    private async ValueTask CloseCurrentAsync(CancellationToken cancellationToken = default)
     {
+        _rowGeneration++;
         var current = _current;
         _current = null;
         if (current is not null)
@@ -191,6 +250,10 @@ internal sealed class Db2iBatchDataReader(
             if (!batch.HasExecutionSession && current is Db2iDataReader staleReader)
             {
                 await staleReader.CloseAfterConnectionChangeAsync().ConfigureAwait(false);
+            }
+            else if (current is Db2iDataReader reader)
+            {
+                await reader.CloseWithCancellationAsync(cancellationToken).ConfigureAwait(false);
             }
             else
             {

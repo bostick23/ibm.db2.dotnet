@@ -18,7 +18,9 @@ tests read the following variables on an opt-in basis:
 - `DB2I_TEST_DML_ID_COLUMN`;
 - `DB2I_TEST_DML_DESCRIPTION_COLUMN`;
 - `DB2I_TEST_DML_DATE_COLUMN`;
-- `DB2I_TEST_DML_DECIMAL_COLUMN`.
+- `DB2I_TEST_DML_DECIMAL_COLUMN`;
+- `DB2I_TEST_LOB_ENABLED`;
+- `DB2I_TEST_LOB_TABLE`.
 
 Unset variables do not cause external connections, and connection strings are
 never written to test output.
@@ -27,6 +29,11 @@ DML tests remain disabled unless explicitly enabled with
 `DB2I_TEST_DML_ENABLED=true`. They accept only simple SQL identifiers, validate
 the configured table structure before writing, and remove every row they
 create. Real transaction tests also require the table to be journaled.
+
+LOB tests require `DB2I_TEST_LOB_ENABLED=true` and a dedicated journaled table
+with the signature documented in the README. They use the existing TCP
+connection setting, verify structure and journaling, use unique identifiers,
+and clean up their data. Tests never create the table.
 
 Run this command before opening a pull request:
 

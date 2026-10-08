@@ -1,6 +1,6 @@
 # Work status
 
-Last updated: October 1, 2026.
+Last updated: October 8, 2026.
 
 This file records the project's operational status. The roadmap defines the
 milestones; active implementation work is tracked here.
@@ -8,16 +8,34 @@ milestones; active implementation work is tracked here.
 ## Current status
 
 - Active milestone: **M4 — Application compatibility**.
-- Current phase: **M4.2 sequential ADO.NET batching, implemented and tested
-  locally; real IBM i validation pending**.
+- Current phase: **M4.3 LOB locator streaming, implemented and tested locally;
+  real IBM i LOB and M4.2 batching validation pending**.
 - Most recently completed milestone: **M3 — DML and transactions**,
   version `0.4.0-alpha.1`.
-- Current package version: **`0.5.0-alpha.3`**; batching changes are unreleased.
-- Current verification: 148 Release tests passed and .NET 8/.NET 10 builds
-  succeeded. This includes 133 local tests (41 for batching) and 15 opt-in
+- Prepared package version: **`0.5.0-alpha.4`**; publication will be triggered
+  by a GitHub Release after the NuGet Trusted Publishing policy is configured.
+- Current verification: 226 Release tests passed and .NET 8/.NET 10 builds
+  succeeded without warnings or errors. This includes 210 local tests and 16 opt-in
   integration cases that performed no external connections because the IBM i
-  environment variables were not configured. Real IBM i batching validation
-  remains pending.
+  environment variables were not configured. Real IBM i batching and LOB
+  validation remain pending.
+- Subsequent integration run loading `tests/Db2i.Tests/.env.local`: 16 cases,
+  11 reported passed and 5 failed. Eight TCP cases actually exercised the host,
+  including read-only batching; two TLS cases and the LOB case performed no
+  connection because their settings were absent. Five table-dependent cases
+  failed before writing because the configured DML table was not found.
+  Transactional batch DML and LOB verification remain pending.
+- The user subsequently reported 16/16 integration cases passing after
+  recreating the DML table. Journaling and actual execution of every case were
+  not independently confirmed. LOB/TLS configuration and setup instructions
+  have since been added locally; their real verification remains pending.
+- Trusted Publishing implementation: release-triggered build/publish jobs,
+  tag/version/main-ancestry gates, package and Source Link checks, and separate
+  retryable package/symbol pushes. Seven release-gate tests and actionlint
+  validation pass. Both packages contain the .NET 8/.NET 10 targets and Source
+  Link metadata; explicit Git/common build references restore Source Link
+  generation with version 10.0.303. OIDC verification awaits the first release.
+  See `docs/nuget-release.md` for setup.
 - Previous M4.1 verification: 104 Release tests passed; .NET 8 and .NET 10 builds;
   Integration category 12/12, including 11 real TCP cases covering queries,
   DML, transactions, job reuse, and rollback on pool return. The TLS case
@@ -33,6 +51,41 @@ milestones; active implementation work is tracked here.
 
 TLS against a real IBM i system still needs separate verification; this did not
 block M3.
+
+## M4.3 — LOB locator streaming
+
+- [x] Negotiate locators and keep cursors open until their locators are released.
+- [x] Support inline types 404/408/412 and locator types 960/964/968, with
+  distinct row footprints, declared maxima, and input handles.
+- [x] Preserve server parameter descriptors separately from client descriptors.
+- [x] Implement read, write, and release requests with JTOpen-based binary
+  vectors, length/offset validation, and truncated-response checks.
+- [x] Add non-seekable `GetStream` and `GetTextReader`, partial getters,
+  synchronous/asynchronous reads, and LOB metadata.
+- [x] Transfer in 64 KiB blocks and limit byte-array/string materialization
+  to 64 MiB of managed content.
+- [x] Preserve multibyte text, split surrogate pairs, and trailing spaces with
+  incremental codecs; map UTF-8 CCSID 1208.
+- [x] Accept caller-owned `Stream`/`TextReader` inputs from their current
+  position, leave them open, and keep `Prepare` free of input consumption.
+- [x] Enforce positive parameter `Size` without silent truncation and replace
+  prior locator contents completely, including shorter and empty inputs.
+- [x] Invalidate LOB preparation after incomplete uploads or transaction changes.
+- [x] Integrate command/batch timeout, cancellation, session identity, and error
+  attribution with getters and returned streams.
+- [x] Release unread block locators and discard sessions whose cleanup or
+  malformed locator replies make reuse unverifiable.
+- [x] Cover local uploads/downloads larger than one packet, input reuse, NULL,
+  empty values, multiple LOBs, rollback, connection replacement, and pooling.
+- [x] Add an opt-in real LOB test using a dedicated journaled table, unique
+  identifiers, structure validation, rollback, and cleanup without table creation.
+- [x] Restore compilation after the interrupted reader implementation, run
+  the full Release suite, and compile both target frameworks.
+- [x] Update README, roadmap, contribution guide, and the release changelog.
+- [ ] Run real IBM i LOB validation with `DB2I_TEST_LOB_ENABLED=true` and
+  `DB2I_TEST_LOB_TABLE` configured alongside the existing TCP connection setting.
+- [ ] Publish `0.5.0-alpha.4` through Trusted Publishing with pending real-host
+  verification explicitly stated; M4.2 transaction verification remains separate.
 
 ## M4.2 — Sequential ADO.NET batching
 
@@ -51,7 +104,7 @@ block M3.
 - [x] Add opt-in real batch query and transactional DML rollback tests.
 - [x] Update Source Link to `10.0.303` to address `GHSA-23fw-v26w-5fgq`.
 - [ ] Verify batching against a real IBM i system.
-- [ ] Release the batching implementation after validation.
+- [ ] Publish the batching implementation in `0.5.0-alpha.4` with validation limits documented.
 
 Batches execute sequentially without array binding or reduced network round
 trips. They do not start an implicit transaction: callers own explicit commit

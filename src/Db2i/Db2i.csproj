@@ -6,7 +6,7 @@
     <AssemblyName>Db2i</AssemblyName>
     <RootNamespace>Db2i</RootNamespace>
     <PackageId>Db2i.AdoNet</PackageId>
-    <Version>0.5.0-alpha.3</Version>
+    <Version>0.5.0-alpha.4</Version>
     <Authors>Db2i contributors</Authors>
     <Copyright>Copyright (c) 2026 Db2i contributors.</Copyright>
     <Title>Db2i - Open-source ADO.NET Provider for IBM i</Title>
@@ -15,7 +15,7 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>db2;db2-for-i;db2i;ibm-i;ibmi;as400;iseries;ado.net;adonet;dotnet;dotnet-core;open-source;managed;database;provider;driver;tcp;tls</PackageTags>
     <PackageProjectUrl>https://github.com/bostick23/ibm.db2.dotnet</PackageProjectUrl>
-    <PackageReleaseNotes>Renames the NuGet package from Db2i to Db2i.AdoNet and highlights its open-source, fully managed IBM i connectivity without IBM client software, ODBC, native libraries, or a Db2 Connect license. The assembly, namespaces, public API, and provider behavior are unchanged.</PackageReleaseNotes>
+    <PackageReleaseNotes>Adds sequential ADO.NET batching and BLOB/CLOB/DBCLOB locator streaming, Stream/TextReader input parameters, cancellation-aware lifetime management, and NuGet Trusted Publishing. Library targets .NET 8 and .NET 10. Real IBM i LOB and TLS validation remain pending; see the changelog for verification details.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/bostick23/ibm.db2.dotnet</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
@@ -27,6 +27,9 @@
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Source Link 10 excludes dependency build assets; import the Git and common targets explicitly. -->
+    <PackageReference Include="Microsoft.Build.Tasks.Git" Version="10.0.303" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.SourceLink.Common" Version="10.0.303" PrivateAssets="all" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.303">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>

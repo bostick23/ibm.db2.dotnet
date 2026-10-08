@@ -85,6 +85,8 @@ public sealed class Db2iParameter : DbParameter
         TimeOnly or TimeSpan => DbType.Time,
         Guid => DbType.Guid,
         byte[] => DbType.Binary,
+        Stream => DbType.Binary,
+        TextReader => DbType.String,
         _ => DbType.Object,
     };
 }

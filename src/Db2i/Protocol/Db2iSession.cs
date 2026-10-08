@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 
 namespace Db2i.Protocol;
 
-internal sealed class Db2iSession : IAsyncDisposable, IDisposable
+internal sealed partial class Db2iSession : IAsyncDisposable, IDisposable
 {
     private readonly Db2iTransport _transport;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
@@ -27,7 +27,7 @@ internal sealed class Db2iSession : IAsyncDisposable, IDisposable
     internal Db2iServerInfo ServerInfo { get; }
 
     internal bool IsPotentiallyUsable
-        => !_disposed && !HasPendingReply && _transport.IsPotentiallyUsable;
+        => !_disposed && !_lobCleanupUncertain && !HasPendingReply && _transport.IsPotentiallyUsable;
 
     internal Db2iSessionLease AcquireOperation()
     {
@@ -112,6 +112,13 @@ internal sealed class Db2iSession : IAsyncDisposable, IDisposable
         }
         catch (Exception exception)
         {
+            if (exception is Db2iException { Kind: Db2iErrorKind.Protocol })
+            {
+                // A malformed descriptor can hide server-allocated parameter locators.
+                // Their cleanup cannot be proved, even when the packet was fully read.
+                _lobCleanupUncertain = true;
+            }
+
             if (rpbCreated
                 && !_disposed
                 && (exception is not OperationCanceledException || !HasPendingReply))
@@ -181,6 +188,7 @@ internal sealed class Db2iSession : IAsyncDisposable, IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var operation = autoCommit ? "enable autocommit" : "start commitment control";
+        await InvalidateLobStatementsAsync(cancellationToken).ConfigureAwait(false);
         var requestedLocatorPersistence = commitmentControlLevel == 0 ? (short)0 : (short)1;
         var changeLocatorPersistence = _serverAllowsLocatorPersistenceChange
             && requestedLocatorPersistence != _locatorPersistence;
@@ -416,7 +424,7 @@ internal sealed class Db2iSession : IAsyncDisposable, IDisposable
             SqlProtocol.OpenDescribeFetch,
             "open/fetch SQL cursor",
             allowEndOfData: true);
-        var block = SqlProtocol.ParseResultBlock(reply, resultFormat);
+        var block = ParseOwnedResultBlock(reply, resultFormat);
         return new Db2iQueryCursor(
             this,
             statement,
@@ -450,7 +458,7 @@ internal sealed class Db2iSession : IAsyncDisposable, IDisposable
             "fetch SQL cursor",
             allowEndOfData: true);
         return (
-            SqlProtocol.ParseResultBlock(reply, resultFormat),
+            ParseOwnedResultBlock(reply, resultFormat),
             endOfData,
             reply.ErrorClass == 2 && reply.ReturnCode == 700);
     }
@@ -478,6 +486,7 @@ internal sealed class Db2iSession : IAsyncDisposable, IDisposable
         }
 
         EnsureOwnedStatement(statement);
+        await ReleaseStatementLobsAsync(statement, cancellationToken).ConfigureAwait(false);
         if (statement.HasClientDescriptor)
         {
             await _transport.SendAsync(
@@ -798,6 +807,7 @@ internal sealed class Db2iSession : IAsyncDisposable, IDisposable
         CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        await InvalidateLobStatementsAsync(cancellationToken).ConfigureAwait(false);
         var correlationId = AllocateControlCorrelationId();
         await _transport.SendAsync(
                 SqlProtocol.CreateTransactionBoundaryRequest(functionId, correlationId),
@@ -903,6 +913,7 @@ internal sealed class Db2iPreparedStatement
         CommandText = commandText;
         ResultFormat = resultFormat;
         ParameterFormat = parameterFormat;
+        ServerParameterFormat = parameterFormat;
         StatementKind = statementKind;
     }
 
@@ -915,6 +926,14 @@ internal sealed class Db2iPreparedStatement
     internal Db2iDataFormat? ResultFormat { get; }
 
     internal Db2iDataFormat? ParameterFormat { get; private set; }
+
+    internal Db2iDataFormat? ServerParameterFormat { get; }
+
+    internal bool IsInvalidated { get; private set; }
+
+    internal bool LobLocatorsReleased { get; set; }
+
+    internal void InvalidateLobPreparation() => IsInvalidated = true;
 
     internal Db2iStatementKind StatementKind { get; }
 
@@ -956,10 +975,15 @@ internal sealed class Db2iQueryCursor
 
     internal Db2iResultBlock CurrentBlock { get; private set; }
 
+    internal Db2iSession Session => _session;
+
+    internal Db2iPreparedStatement Statement => _statement;
+
     internal bool EndOfData { get; private set; }
 
     internal async ValueTask<Db2iResultBlock> FetchAsync(CancellationToken cancellationToken)
     {
+        await ReleaseCurrentBlockLobsAsync(cancellationToken).ConfigureAwait(false);
         if (EndOfData || _singleRow)
         {
             EndOfData = true;
@@ -977,6 +1001,7 @@ internal sealed class Db2iQueryCursor
 
     internal async ValueTask CloseAsync(CancellationToken cancellationToken)
     {
+        await ReleaseCurrentBlockLobsAsync(cancellationToken).ConfigureAwait(false);
         if (_cursorClosed)
         {
             return;
@@ -984,5 +1009,16 @@ internal sealed class Db2iQueryCursor
 
         _cursorClosed = true;
         await _session.CloseCursorAsync(_statement, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask ReleaseCurrentBlockLobsAsync(CancellationToken cancellationToken)
+    {
+        foreach (var handle in CurrentBlock.Rows.SelectMany(row => row)
+                     .OfType<Db2iLobValue>().Select(value => value.Handle).Distinct())
+        {
+            await _session.FreeLobAsync(_statement.Handle, handle, cancellationToken).ConfigureAwait(false);
+        }
+
+        CurrentBlock = Db2iResultBlock.Empty;
     }
 }

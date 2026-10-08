@@ -94,6 +94,20 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
 
     internal Db2iDataFormat? LastClientParameterFormat { get; private set; }
 
+    internal int? LobThreshold { get; private set; }
+
+    internal byte? CloseOnEof { get; private set; }
+
+    internal IReadOnlyList<FakeLobRequest> LobReads => _lobReads.ToArray();
+
+    internal IReadOnlyList<FakeLobRequest> LobWrites => _lobWrites.ToArray();
+
+    internal IReadOnlyList<int> FreedLobHandles => _freedLobHandles.ToArray();
+
+    internal IReadOnlyDictionary<int, byte[]> UploadedLobs => _uploadedLobs;
+
+    internal IReadOnlyList<IReadOnlyDictionary<int, byte[]>> ExecutedLobs => _executedLobs.ToArray();
+
     internal IReadOnlyList<(bool AutoCommit, short CommitmentLevel)> TransactionModes
         => _transactionModes;
 
@@ -104,6 +118,11 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
     private readonly ConcurrentQueue<string> _preparedStatements = new();
     private readonly ConcurrentQueue<string> _executedSql = new();
     private readonly ConcurrentQueue<ReadOnlyMemory<byte>?> _executedParameters = new();
+    private readonly ConcurrentQueue<FakeLobRequest> _lobReads = new();
+    private readonly ConcurrentQueue<FakeLobRequest> _lobWrites = new();
+    private readonly ConcurrentQueue<int> _freedLobHandles = new();
+    private readonly ConcurrentDictionary<int, byte[]> _uploadedLobs = new();
+    private readonly ConcurrentQueue<IReadOnlyDictionary<int, byte[]>> _executedLobs = new();
     private readonly List<(bool AutoCommit, short CommitmentLevel)> _transactionModes = [];
     private readonly List<short?> _transactionLocatorPersistence = [];
 
@@ -226,6 +245,12 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
                             stream,
                             DatabaseProtocol.SetAttributesRequestId)
                         .ConfigureAwait(false);
+                    var lobThreshold = ClientAccessCodePoints.Find(attributesRequest.Bytes, 40, 0x3822);
+                    LobThreshold = lobThreshold is { } threshold
+                        ? BinaryPrimitives.ReadInt32BigEndian(threshold.Span)
+                        : null;
+                    var closeOnEof = ClientAccessCodePoints.Find(attributesRequest.Bytes, 40, 0x383F);
+                    CloseOnEof = closeOnEof is { } close ? close.Span[0] : null;
                     await WriteAsync(
                             stream,
                             CreateDatabaseAttributesReply(
@@ -296,6 +321,7 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
         var blockIndexByHandle = new Dictionary<ushort, int>();
         var scenarioByHandle = new Dictionary<ushort, FakeQueryScenario>();
         var sqlByHandle = new Dictionary<ushort, string>();
+        var lobs = new Dictionary<int, FakeLobData>();
         try
         {
             while (!_shutdown.IsCancellationRequested)
@@ -323,6 +349,22 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
                         }
 
                         scenarioByHandle[handle] = scenario;
+                        if (scenario.Lobs is { } outputLobs)
+                        {
+                            foreach (var lob in outputLobs)
+                            {
+                                lobs[lob.Key] = lob.Value;
+                            }
+                        }
+
+                        foreach (var field in scenario.ParameterFormat.Fields)
+                        {
+                            if (field.NativeType is 960 or 964 or 968)
+                            {
+                                lobs.TryAdd(field.LobLocator, new FakeLobData(
+                                    [], field.Ccsid, field.NativeType == 968));
+                            }
+                        }
                         if (scenario.StallOnPrepare)
                         {
                             await _cancelReceived.Task.WaitAsync(_shutdown.Token)
@@ -352,6 +394,7 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
                             SqlProtocol.ExtendedParameterMarkerData);
                         _executedSql.Enqueue(sqlByHandle[handle]);
                         _executedParameters.Enqueue(LastParameterData);
+                        CaptureInputLobs(scenario, lobs);
                         if (scenario.StallOnExecute)
                         {
                             await _cancelReceived.Task.WaitAsync(_shutdown.Token)
@@ -436,6 +479,7 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
                             SqlProtocol.ExtendedParameterMarkerData);
                         _executedSql.Enqueue(sqlByHandle[handle]);
                         _executedParameters.Enqueue(LastParameterData);
+                        CaptureInputLobs(scenario, lobs);
                         blockIndexByHandle[handle] = 0;
                         if (scenario.StallOnOpen)
                         {
@@ -485,6 +529,11 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
                                     returnCode: scenario.CancelReturnCode))
                             .ConfigureAwait(false);
                         break;
+                    case 0x1816:
+                    case 0x1817:
+                    case 0x1819:
+                        await HandleLobAsync(stream, packet, scenario, lobs).ConfigureAwait(false);
+                        break;
                     case SqlProtocol.Close:
                     case SqlProtocol.DeleteDescriptor:
                         break;
@@ -512,6 +561,145 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
         {
         }
+    }
+
+    private void CaptureInputLobs(FakeQueryScenario scenario, Dictionary<int, FakeLobData> lobs)
+    {
+        var values = new Dictionary<int, byte[]>();
+        foreach (var field in scenario.ParameterFormat.Fields)
+        {
+            if (field.NativeType is 960 or 964 or 968
+                && lobs.TryGetValue(field.LobLocator, out var lob))
+            {
+                values[field.LobLocator] = lob.Data.ToArray();
+            }
+        }
+
+        _executedLobs.Enqueue(values);
+    }
+
+    // The fake implements the JTOpen DBSQLRequestDS / JDLobLocator wire shapes
+    // independently of the provider's request and response codecs.
+    private async Task HandleLobAsync(
+        Stream stream,
+        ClientAccessPacket packet,
+        FakeQueryScenario scenario,
+        Dictionary<int, FakeLobData> lobs)
+    {
+        var function = packet.Header.RequestReplyId;
+        var locator = ReadInt32CodePoint(packet, 0x3818);
+        if (function == 0x1819)
+        {
+            _freedLobHandles.Enqueue(locator);
+            if (scenario.LobFreeSqlCode is { } freeSqlCode)
+            {
+                await WriteAsync(stream, CreateSqlReply(packet.Header.CorrelationId,
+                    function, 1, freeSqlCode, freeSqlCode, "HY000", "Fake LOB release failure."))
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            lobs.Remove(locator);
+            await WriteAsync(stream, CreateSqlReply(packet.Header.CorrelationId, function))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (!lobs.TryGetValue(locator, out var lob))
+        {
+            throw new InvalidDataException($"Unknown fake LOB locator {locator}.");
+        }
+
+        var offset = ReadInt32CodePoint(packet, 0x381A);
+        var amount = ReadInt32CodePoint(packet, 0x3819);
+        var unitSize = lob.Graphic ? 2 : 1;
+        if (offset < 0 || amount < 0)
+        {
+            throw new InvalidDataException("Negative LOB request offset or amount.");
+        }
+
+        if (function == 0x1816)
+        {
+            _lobReads.Enqueue(new FakeLobRequest(locator, offset, amount, false));
+            if (scenario.StallOnLobRead)
+            {
+                await _cancelReceived.Task.WaitAsync(_shutdown.Token).ConfigureAwait(false);
+            }
+
+            if (scenario.LobReadSqlCode is { } sqlCode)
+            {
+                await WriteAsync(stream, CreateSqlReply(packet.Header.CorrelationId,
+                    function, 1, sqlCode, sqlCode, "HY000", "Fake LOB retrieval failure."))
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            var byteOffset = checked(offset * unitSize);
+            var count = Math.Min(checked(amount * unitSize), Math.Max(0, lob.Data.Length - byteOffset));
+            var payload = new byte[6 + count];
+            BinaryPrimitives.WriteUInt16BigEndian(payload, checked((ushort)lob.Ccsid));
+            BinaryPrimitives.WriteInt32BigEndian(payload.AsSpan(2), count / unitSize);
+            lob.Data.AsSpan(Math.Min(byteOffset, lob.Data.Length), count).CopyTo(payload.AsSpan(6));
+            var logicalLength = lob.LogicalLength ?? lob.Data.Length / unitSize;
+            var length = new byte[10];
+            BinaryPrimitives.WriteUInt16BigEndian(length, 8);
+            BinaryPrimitives.WriteInt64BigEndian(length.AsSpan(2), logicalLength);
+            await WriteAsync(stream, CreateSqlReply(packet.Header.CorrelationId, function,
+                codePoints: [(0x380F, payload), (0x3810, length)]))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var truncatePayload = ClientAccessCodePoints.Find(packet.Bytes, 40, 0x3822);
+        var truncate = truncatePayload is { } trunc && trunc.Span[0] == 0xF0;
+        _lobWrites.Enqueue(new FakeLobRequest(locator, offset, amount, truncate));
+        if (scenario.StallOnLobWrite)
+        {
+            await _cancelReceived.Task.WaitAsync(_shutdown.Token).ConfigureAwait(false);
+        }
+
+        if (scenario.LobWriteSqlCode is { } writeSqlCode)
+        {
+            await WriteAsync(stream, CreateSqlReply(packet.Header.CorrelationId,
+                function, 1, writeSqlCode, writeSqlCode, "HY000", "Fake LOB write failure."))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var data = ClientAccessCodePoints.Find(packet.Bytes, 40, 0x381D)
+            ?? throw new InvalidDataException("LOB write data is missing.");
+        if (data.Length < 6 || BinaryPrimitives.ReadUInt16BigEndian(data.Span) != 65535)
+        {
+            throw new InvalidDataException("Unexpected LOB write CCSID or truncated data.");
+        }
+
+        var byteCount = BinaryPrimitives.ReadInt32BigEndian(data.Span[2..]);
+        if (byteCount != data.Length - 6 || byteCount != checked(amount * unitSize))
+        {
+            throw new InvalidDataException("LOB write amount differs from the data length.");
+        }
+
+        var destinationOffset = checked(offset * unitSize);
+        var newLength = checked(destinationOffset + byteCount);
+        var result = new byte[truncate ? newLength : Math.Max(lob.Data.Length, newLength)];
+        lob.Data.AsSpan(0, Math.Min(lob.Data.Length, result.Length)).CopyTo(result);
+        data.Span[6..].CopyTo(result.AsSpan(destinationOffset));
+        lobs[locator] = lob with { Data = result, LogicalLength = null };
+        _uploadedLobs[locator] = result;
+        await WriteAsync(stream, CreateSqlReply(packet.Header.CorrelationId, function))
+            .ConfigureAwait(false);
+    }
+
+    private static int ReadInt32CodePoint(ClientAccessPacket packet, ushort codePoint)
+    {
+        var payload = ClientAccessCodePoints.Find(packet.Bytes, 40, codePoint)
+            ?? throw new InvalidDataException($"Code point 0x{codePoint:X4} is missing.");
+        if (payload.Length != 4)
+        {
+            throw new InvalidDataException($"Code point 0x{codePoint:X4} is not an Int32.");
+        }
+
+        return BinaryPrimitives.ReadInt32BigEndian(payload.Span);
     }
 
     private byte[] CreateSeedReply()
@@ -728,6 +916,8 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
             BinaryPrimitives.WriteInt16BigEndian(field[8..], (short)source.Scale);
             BinaryPrimitives.WriteInt16BigEndian(field[10..], (short)source.Precision);
             BinaryPrimitives.WriteUInt16BigEndian(field[12..], (ushort)source.Ccsid);
+            BinaryPrimitives.WriteInt32BigEndian(field[17..], source.LobLocator);
+            BinaryPrimitives.WriteInt32BigEndian(field[26..], source.LobMaxSize);
             var name = IbmIEncoding.Encode(37, source.Name);
             if (name.Length > 30)
             {
@@ -760,7 +950,12 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
                 parameters[index] = new Db2iParameter { Value = row[index] };
             }
 
-            rowPayloads.Add(Db2iTypeCodec.EncodeParameterRow(format, parameters));
+            // Locator output rows contain their actual handles, independently of
+            // input binding (which obtains handles from parameter descriptors).
+            var scalarFields = format.Fields.Select(field => field.NativeType is 960 or 964 or 968
+                ? field with { SqlType = 497, Ccsid = 0 } : field).ToArray();
+            rowPayloads.Add(Db2iTypeCodec.EncodeParameterRow(
+                format with { Fields = scalarFields }, parameters));
         }
 
         var indicatorLength = rows.Count * format.Fields.Count * 2;
@@ -975,4 +1170,18 @@ internal sealed record FakeQueryScenario(
     int CancelReturnCode = 0,
     int? CommitSqlCode = null,
     string CommitSqlState = "00000",
-    bool RejectFirstLocatorPersistenceChange = false);
+    bool RejectFirstLocatorPersistenceChange = false,
+    IReadOnlyDictionary<int, FakeLobData>? Lobs = null,
+    bool StallOnLobRead = false,
+    bool StallOnLobWrite = false,
+    int? LobReadSqlCode = null,
+    int? LobWriteSqlCode = null,
+    int? LobFreeSqlCode = null);
+
+internal sealed record FakeLobData(
+    byte[] Data,
+    int Ccsid = 65535,
+    bool Graphic = false,
+    long? LogicalLength = null);
+
+internal sealed record FakeLobRequest(int Handle, int Offset, int Amount, bool Truncate);

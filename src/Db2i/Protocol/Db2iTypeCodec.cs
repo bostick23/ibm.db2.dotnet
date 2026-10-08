@@ -22,6 +22,38 @@ internal static class Db2iTypeCodec
         }
 
         var value = parameter.Value;
+        if (serverField.IsLob)
+        {
+            var binary = serverField.NativeType is 404 or 960;
+            if (value is not null and not DBNull
+                && !(binary ? value is byte[] or Stream : value is string or TextReader))
+            {
+                throw new ArgumentException(binary
+                    ? "Un parametro BLOB richiede byte[] o Stream."
+                    : "Un parametro CLOB/DBCLOB richiede string o TextReader.", nameof(parameter));
+            }
+
+            if (serverField.LobLocator <= 0)
+            {
+                throw new NotSupportedException(
+                    "IBM i non ha restituito un locator per il parametro LOB. Usare un CAST SQL esplicito.");
+            }
+
+            return serverField with
+            {
+                SqlType = (binary ? 960 : serverField.IsGraphicLob ? 968 : 964) | 1,
+                Length = 4,
+                Name = string.Empty,
+                Offset = offset,
+            };
+        }
+
+        if (value is Stream or TextReader)
+        {
+            throw new NotSupportedException(
+                "I parametri Stream/TextReader richiedono un tipo LOB nel descrittore del server; usare un CAST SQL esplicito.");
+        }
+
         if ((value is null or DBNull) && !parameter.DbTypeWasSet)
         {
             return serverField with { Name = string.Empty, Offset = offset };
@@ -137,14 +169,15 @@ internal static class Db2iTypeCodec
                 "The extended SQL result-data dimensions do not match the descriptor.");
         }
 
-        var indicatorsLength = checked(rowCount * columnCount * indicatorSize);
-        var dataLength = checked(rowCount * rowSize);
-        if (payload.Length < checked(20 + indicatorsLength + dataLength))
+        var indicatorsLength64 = (long)rowCount * columnCount * indicatorSize;
+        var dataLength64 = (long)rowCount * rowSize;
+        if (20 + indicatorsLength64 + dataLength64 > payload.Length)
         {
             throw ClientAccessCodePoints.ProtocolError(
                 "The extended SQL result data is truncated.");
         }
 
+        var indicatorsLength = (int)indicatorsLength64;
         var rows = new List<object?[]>(rowCount);
         var dataStart = 20 + indicatorsLength;
         for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
@@ -161,10 +194,10 @@ internal static class Db2iTypeCodec
                 if (!isNull)
                 {
                     var field = format.Fields[columnIndex];
-                    row[columnIndex] = DecodeValue(
-                        payload.Slice(rowStart + field.Offset, field.Length),
-                        field,
-                        format);
+                    var source = payload.Slice(rowStart + field.Offset, field.Length);
+                    row[columnIndex] = field.IsLobLocator
+                        ? DecodeLocator(source, field, columnIndex)
+                        : DecodeValue(source, field, format);
                 }
             }
 
@@ -181,6 +214,11 @@ internal static class Db2iTypeCodec
     {
         switch (field.NativeType)
         {
+            case 960:
+            case 964:
+            case 968:
+                BinaryPrimitives.WriteInt32BigEndian(destination, field.LobLocator);
+                break;
             case 384:
                 EncodeText(destination, field.Ccsid, ConvertDate(value).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
                 break;
@@ -260,6 +298,8 @@ internal static class Db2iTypeCodec
             384 => DecodeDate(source, format.DateFormat),
             388 => DecodeTime(source, format.TimeFormat),
             392 => DecodeTimestamp(source),
+            404 => DecodeInlineLob(source, field),
+            408 or 412 => IbmIEncoding.DecodeExact(field.Ccsid, DecodeInlineLob(source, field)),
             448 => DecodeVaryingText(source, field.Ccsid),
             452 => IbmIEncoding.DecodeExact(field.Ccsid, source),
             480 when field.Length == 4 => BitConverter.Int32BitsToSingle(
@@ -277,6 +317,34 @@ internal static class Db2iTypeCodec
                 $"IBM i returned unsupported SQL native type {field.NativeType}.",
                 Db2iErrorKind.Protocol),
         };
+
+    private static Db2iLobValue DecodeLocator(
+        ReadOnlySpan<byte> source, Db2iFieldDescriptor field, int columnIndex)
+    {
+        if (source.Length != 4 || BinaryPrimitives.ReadInt32BigEndian(source) <= 0)
+        {
+            throw ClientAccessCodePoints.ProtocolError("The SQL LOB locator is invalid.");
+        }
+
+        return new Db2iLobValue(field, BinaryPrimitives.ReadInt32BigEndian(source), columnIndex);
+    }
+
+    private static byte[] DecodeInlineLob(ReadOnlySpan<byte> source, Db2iFieldDescriptor field)
+    {
+        if (source.Length < 4)
+        {
+            throw ClientAccessCodePoints.ProtocolError("The inline SQL LOB is truncated.");
+        }
+
+        var units = BinaryPrimitives.ReadInt32BigEndian(source);
+        var byteLength = (long)units * (field.IsGraphicLob ? 2 : 1);
+        if (units < 0 || byteLength > source.Length - 4)
+        {
+            throw ClientAccessCodePoints.ProtocolError("The inline SQL LOB length is invalid.");
+        }
+
+        return source.Slice(4, (int)byteLength).ToArray();
+    }
 
     private static Db2iFieldDescriptor Create(
         int nativeType,

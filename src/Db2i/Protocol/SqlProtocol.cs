@@ -7,7 +7,7 @@ namespace Db2i.Protocol;
 // Wire layouts and function/code-point identifiers are ported from the
 // JTOpen DBBaseRequestDS, DBSQLRequestDS, DBSQLRPBDS, DBSQLDescriptorDS,
 // DBExtendedDataFormat and DBSuperExtendedDataFormat classes.
-internal static class SqlProtocol
+internal static partial class SqlProtocol
 {
     internal const ushort CreateRpb = 0x1D00;
     internal const ushort DeleteRpb = 0x1D02;
@@ -431,6 +431,7 @@ internal static class SqlProtocol
                 ? string.Empty
                 : IbmIEncoding.DecodeExact(nameCcsid, field.Slice(34, nameLength));
             var length = BinaryPrimitives.ReadInt32BigEndian(field[4..]);
+            ValidateFieldStorage(field, length, rowOffset);
             fields.Add(new Db2iFieldDescriptor(
                 BinaryPrimitives.ReadUInt16BigEndian(field[2..]),
                 length,
@@ -438,7 +439,9 @@ internal static class SqlProtocol
                 BinaryPrimitives.ReadInt16BigEndian(field[10..]),
                 BinaryPrimitives.ReadUInt16BigEndian(field[12..]),
                 name,
-                rowOffset));
+                rowOffset,
+                BinaryPrimitives.ReadInt32BigEndian(field[17..]),
+                BinaryPrimitives.ReadInt32BigEndian(field[26..])));
             rowOffset = checked(rowOffset + length);
         }
 
@@ -473,6 +476,7 @@ internal static class SqlProtocol
                 field,
                 serverCcsid);
             var length = BinaryPrimitives.ReadInt32BigEndian(field[4..]);
+            ValidateFieldStorage(field, length, rowOffset);
             fields.Add(new Db2iFieldDescriptor(
                 BinaryPrimitives.ReadUInt16BigEndian(field[2..]),
                 length,
@@ -480,7 +484,9 @@ internal static class SqlProtocol
                 BinaryPrimitives.ReadInt16BigEndian(field[10..]),
                 BinaryPrimitives.ReadUInt16BigEndian(field[12..]),
                 name,
-                rowOffset));
+                rowOffset,
+                BinaryPrimitives.ReadInt32BigEndian(field[17..]),
+                BinaryPrimitives.ReadInt32BigEndian(field[26..])));
             rowOffset = checked(rowOffset + length);
         }
 
@@ -565,6 +571,8 @@ internal static class SqlProtocol
             BinaryPrimitives.WriteInt16BigEndian(field[8..], checked((short)source.Scale));
             BinaryPrimitives.WriteInt16BigEndian(field[10..], checked((short)source.Precision));
             BinaryPrimitives.WriteUInt16BigEndian(field[12..], checked((ushort)source.Ccsid));
+            BinaryPrimitives.WriteInt32BigEndian(field[17..], source.LobLocator);
+            BinaryPrimitives.WriteInt32BigEndian(field[26..], source.LobMaxSize);
         }
 
         return payload;
@@ -629,6 +637,20 @@ internal static class SqlProtocol
         {
             throw ClientAccessCodePoints.ProtocolError(
                 $"The SQL descriptor record size {declared} is smaller than {calculated}.");
+        }
+    }
+
+    private static void ValidateFieldStorage(ReadOnlySpan<byte> field, int length, int rowOffset)
+    {
+        var nativeType = BinaryPrimitives.ReadUInt16BigEndian(field[2..]) & ~1;
+        var locator = nativeType is 960 or 964 or 968;
+        var inlineLob = nativeType is 404 or 408 or 412;
+        if (length < 0 || (long)rowOffset + length > int.MaxValue
+            || (locator && length != 4)
+            || (inlineLob && (length < 4 || (nativeType == 412 && (length & 1) != 0)))
+            || ((locator || inlineLob) && BinaryPrimitives.ReadInt32BigEndian(field[26..]) < 0))
+        {
+            throw ClientAccessCodePoints.ProtocolError("The SQL descriptor field storage or LOB maximum length is invalid.");
         }
     }
 
@@ -726,11 +748,19 @@ internal sealed record Db2iFieldDescriptor(
     int Precision,
     int Ccsid,
     string Name,
-    int Offset)
+    int Offset,
+    int LobLocator = 0,
+    int LobMaxSize = 0)
 {
     internal int NativeType => SqlType & ~1;
 
     internal bool AllowNull => (SqlType & 1) != 0;
+
+    internal bool IsLob => NativeType is 404 or 408 or 412 or 960 or 964 or 968;
+
+    internal bool IsLobLocator => NativeType is 960 or 964 or 968;
+
+    internal bool IsGraphicLob => NativeType is 412 or 968;
 
     internal Db2iColumn ToColumn()
     {
@@ -739,6 +769,9 @@ internal sealed record Db2iFieldDescriptor(
             384 => (typeof(DateTime), "DATE", 10),
             388 => (typeof(TimeSpan), "TIME", 8),
             392 => (typeof(DateTime), "TIMESTAMP", Length),
+            404 or 960 => (typeof(byte[]), "BLOB", LobMaxSize > 0 ? LobMaxSize : Math.Max(0, Length - 4)),
+            408 or 964 => (typeof(string), "CLOB", LobMaxSize > 0 ? LobMaxSize : Math.Max(0, Length - 4)),
+            412 or 968 => (typeof(string), "DBCLOB", LobMaxSize > 0 ? LobMaxSize : Math.Max(0, Length - 4) / 2),
             448 => (typeof(string), "VARCHAR", Math.Max(0, Length - 2)),
             452 => (typeof(string), "CHAR", Length),
             480 when Length == 4 => (typeof(float), "REAL", 4),
@@ -762,7 +795,8 @@ internal sealed record Db2iFieldDescriptor(
             AllowNull,
             columnSize,
             Precision,
-            Scale);
+            Scale,
+            IsLob);
     }
 }
 

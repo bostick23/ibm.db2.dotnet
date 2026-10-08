@@ -1,0 +1,140 @@
+name: Publish NuGet
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nuget-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'bostick23/ibm.db2.dotnet'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Test release validation
+        run: python3 -m unittest discover -s tests/release -v
+
+      - name: Validate release tag, version and main ancestry
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          git fetch origin main:refs/remotes/origin/main
+          python3 .github/scripts/release.py release --tag "$RELEASE_TAG" --prerelease "$RELEASE_PRERELEASE"
+
+      - name: Restore
+        run: dotnet restore Db2i.sln
+
+      - name: Test Release on .NET 8 and build both library targets
+        run: dotnet test Db2i.sln --configuration Release --no-restore -p:ContinuousIntegrationBuild=true
+
+      - name: Pack verified source
+        run: dotnet pack src/Db2i/Db2i.csproj --configuration Release --no-build --no-restore --output artifacts -p:ContinuousIntegrationBuild=true
+
+      - name: Verify package identity, contents and Source Link
+        env:
+          PACKAGE_VERSION: ${{ steps.release.outputs.version }}
+        run: python3 .github/scripts/release.py packages --directory artifacts --version "$PACKAGE_VERSION" --commit "$GITHUB_SHA" --write-checksums
+
+      - name: Upload verified packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuget-release
+          path: |
+            artifacts/*.nupkg
+            artifacts/*.snupkg
+            artifacts/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: nuget
+      url: https://www.nuget.org/packages/Db2i.AdoNet/${{ needs.build.outputs.version }}
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out verification script from the same commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download verified packages
+        uses: actions/download-artifact@v8
+        with:
+          name: nuget-release
+          path: artifacts
+
+      - name: Validate publisher configuration and downloaded packages
+        env:
+          NUGET_USER: ${{ vars.NUGET_USER }}
+          PACKAGE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if [ -z "$NUGET_USER" ]; then
+            echo "::error::Set the NUGET_USER variable on the nuget environment to your NuGet profile name."
+            exit 1
+          fi
+          python3 .github/scripts/release.py packages --directory artifacts --version "$PACKAGE_VERSION" --commit "$GITHUB_SHA" --verify-checksums
+
+      - name: NuGet login with OIDC
+        id: login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Publish package
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+          PACKAGE_VERSION: ${{ needs.build.outputs.version }}
+        run: dotnet nuget push "artifacts/Db2i.AdoNet.$PACKAGE_VERSION.nupkg" --source https://api.nuget.org/v3/index.json --api-key "$NUGET_API_KEY" --no-symbols --skip-duplicate
+
+      - name: Publish symbols separately for retry support
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+          PACKAGE_VERSION: ${{ needs.build.outputs.version }}
+        run: dotnet nuget push "artifacts/Db2i.AdoNet.$PACKAGE_VERSION.snupkg" --source https://api.nuget.org/v3/index.json --api-key "$NUGET_API_KEY" --skip-duplicate
+
+      - name: Attach verified packages and checksums to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PACKAGE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "artifacts/Db2i.AdoNet.$PACKAGE_VERSION.nupkg" \
+            "artifacts/Db2i.AdoNet.$PACKAGE_VERSION.snupkg" \
+            artifacts/SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+          printf 'Published [Db2i.AdoNet %s](https://www.nuget.org/packages/Db2i.AdoNet/%s). NuGet indexing and symbol validation may take a few minutes.\n' "$PACKAGE_VERSION" "$PACKAGE_VERSION" >> "$GITHUB_STEP_SUMMARY"
