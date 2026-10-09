@@ -305,6 +305,11 @@ public sealed class Db2iLobTests
         Assert.Single(server.PreparedStatements);
         Assert.Equal(3, server.LobWrites.Count(request => request.Truncate && request.Offset == 0));
         Assert.All(server.LobWrites, request => Assert.InRange(request.Amount, 0, 65_536));
+        Assert.Empty(server.StatementReleasedLobHandles);
+        await command.DisposeAsync();
+        Assert.Equal(new[] { 21 }, server.StatementReleasedLobHandles);
+        Assert.Empty(server.FreedLobHandles);
+        Assert.Empty(server.RejectedLobStatementDeletes);
     }
 
     [Theory]
@@ -386,6 +391,188 @@ public sealed class Db2iLobTests
         parameter.Value = text ? "èè" : new byte[] { 1, 2 };
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
         Assert.Equal(text ? Encoding.UTF8.GetBytes("èè") : new byte[] { 1, 2 }, server.UploadedLobs[21]);
+        Assert.Equal(2, server.PreparedStatements.Count);
+        Assert.Equal(new[] { 21 }, server.StatementReleasedLobHandles);
+        Assert.Empty(server.FreedLobHandles);
+        Assert.Empty(server.RejectedLobStatementDeletes);
+    }
+
+    [Fact]
+    public async Task PartialUploadFailureDeletesTheOwningStatementBeforeRepreparing()
+    {
+        await using var server = new FakeIbmIHostServer(queryScenario: InputScenario(960));
+        await using var connection = CreateConnection(server);
+        await connection.OpenAsync();
+        await using var command = new Db2iCommand("INSERT INTO LOBS(B) VALUES (?)", connection);
+        using var input = new NonSeekableInput(new byte[65_537]);
+        var parameter = command.Parameters.Add("b", input);
+        parameter.Size = 65_536;
+
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => command.ExecuteNonQueryAsync());
+        Assert.Equal(65_536, Assert.Single(server.LobWrites).Amount);
+        Assert.Empty(server.ExecutedSql);
+        Assert.Equal(new[] { 21 }, server.StatementReleasedLobHandles);
+        Assert.Empty(server.FreedLobHandles);
+        Assert.Empty(server.RejectedLobStatementDeletes);
+        Assert.Equal(ConnectionState.Open, connection.State);
+        Assert.False(input.WasDisposed);
+
+        parameter.Value = Array.Empty<byte>();
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        Assert.Equal(2, server.PreparedStatements.Count);
+        Assert.Empty(Assert.Single(server.ExecutedLobs)[21]);
+        await command.DisposeAsync();
+        Assert.Equal(new[] { 21, 21 }, server.StatementReleasedLobHandles);
+        Assert.Empty(server.FreedLobHandles);
+    }
+
+    [Fact]
+    public async Task FailedUploadPreservesOriginalErrorWhenStatementCleanupFailsAndDiscardsSession()
+    {
+        await using var server = new FakeIbmIHostServer(queryScenario:
+            InputScenario(960) with { DeleteRpbReturnCode = -816 });
+        await using var source = new Db2iDataSource(ConnectionString(server) + ";Pooling=true;Maximum Pool Size=1");
+        await using (var connection = await source.OpenConnectionAsync())
+        await using (var command = new Db2iCommand("INSERT INTO LOBS(B) VALUES (?)", connection))
+        {
+            using var input = new NonSeekableInput(new byte[65_537]);
+            command.Parameters.Add("b", input).Size = 65_536;
+
+            await Assert.ThrowsAnyAsync<ArgumentException>(() => command.ExecuteNonQueryAsync());
+            Assert.Equal(65_536, Assert.Single(server.LobWrites).Amount);
+            Assert.Empty(server.ExecutedSql);
+            Assert.Empty(server.StatementReleasedLobHandles);
+            Assert.Empty(server.FreedLobHandles);
+            Assert.Single(server.RejectedLobStatementDeletes);
+            Assert.Contains(SqlProtocol.SendResultSet, server.SqlRequests);
+            Assert.Equal(ConnectionState.Closed, connection.State);
+        }
+
+        await using var reopened = await source.OpenConnectionAsync();
+        Assert.Equal(2, server.AcceptedConnectionCount);
+    }
+
+    [Fact]
+    public async Task TimedOutStatementCleanupRemainsUnsafeAfterCommandForgetsTheStatement()
+    {
+        await using var server = new FakeIbmIHostServer(queryScenario:
+            InputScenario(960) with { StallOnDeleteRpb = true });
+        await using var source = new Db2iDataSource(ConnectionString(server) + ";Pooling=true;Maximum Pool Size=1");
+        await using (var connection = await source.OpenConnectionAsync())
+        {
+            var session = connection.GetOpenSession();
+            using (session.AcquireOperation())
+            {
+                var statement = await session.PrepareAsync("INSERT INTO LOBS(B) VALUES (?)", 30, default);
+                using var cleanupTimeout = new CancellationTokenSource();
+                var cleanup = session.DeleteStatementAsync(statement, cleanupTimeout.Token).AsTask();
+                await WaitForAsync(() => server.SqlRequests.Contains(SqlProtocol.DeleteRpb));
+                cleanupTimeout.CancelAfter(TimeSpan.FromMilliseconds(50));
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cleanup);
+
+                // Command disposal forgets timed-out statements. The session must
+                // remember the uncertain cleanup even after that local bookkeeping.
+                statement.MarkDeleted();
+                Assert.Empty(server.StatementReleasedLobHandles);
+                Assert.Empty(server.FreedLobHandles);
+            }
+        }
+
+        await using var reopened = await source.OpenConnectionAsync();
+        Assert.Equal(2, server.AcceptedConnectionCount);
+        Assert.Equal(1, server.SqlRequests.Count(request => request == SqlProtocol.DeleteRpb));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DisposalPreservesDeleteRpbErrorAndDiscardsTheSessionWhenDiagnosticsAreMalformed(
+        bool malformedDiagnostic)
+    {
+        await using var server = new FakeIbmIHostServer(queryScenario: InputScenario(960) with
+        {
+            DeleteRpbReturnCode = -816,
+            MalformedCleanupDiagnostic = malformedDiagnostic,
+        });
+        await using var source = new Db2iDataSource(ConnectionString(server) + ";Pooling=true;Maximum Pool Size=1");
+        await using (var connection = await source.OpenConnectionAsync())
+        await using (var command = new Db2iCommand("INSERT INTO LOBS(B) VALUES (?)", connection))
+        {
+            command.Parameters.Add("b", new byte[] { 1 });
+            await command.PrepareAsync();
+            var error = await Assert.ThrowsAsync<Db2iException>(() => command.DisposeAsync().AsTask());
+            Assert.Equal((short)2, error.ErrorClass);
+            Assert.Equal(-816, error.HostReturnCode);
+            Assert.Equal(malformedDiagnostic ? null : -901, error.SqlCode);
+            Assert.Equal(malformedDiagnostic ? null : "HY000", error.SqlState);
+            Assert.Single(server.RejectedLobStatementDeletes);
+            Assert.Contains(SqlProtocol.SendResultSet, server.SqlRequests);
+            Assert.Empty(server.FreedLobHandles);
+            Assert.Empty(server.StatementReleasedLobHandles);
+        }
+
+        await using var reopened = await source.OpenConnectionAsync();
+        Assert.Equal(2, server.AcceptedConnectionCount);
+        Assert.Single(server.RejectedLobStatementDeletes);
+    }
+
+    [Theory]
+    [InlineData(960, 65535, false)]
+    [InlineData(960, 65535, true)]
+    [InlineData(964, 1208, false)]
+    [InlineData(964, 1208, true)]
+    [InlineData(968, 1200, false)]
+    [InlineData(968, 1200, true)]
+    public async Task DisposingPreparedInputReleasesDescriptorLocatorAndKeepsPooledSessionReusable(
+        int type, int ccsid, bool execute)
+    {
+        await using var server = new FakeIbmIHostServer(queryScenario: InputScenario(type, ccsid));
+        await using var source = new Db2iDataSource(ConnectionString(server) + ";Pooling=true;Maximum Pool Size=1");
+        await using (var connection = await source.OpenConnectionAsync())
+        {
+            await using var command = new Db2iCommand("INSERT INTO LOBS(V) VALUES (?)", connection);
+            command.Parameters.Add("v", type == 960 ? new byte[] { 1, 2 } : "è😀  ");
+            await command.PrepareAsync();
+            if (execute)
+            {
+                Assert.Equal(1, await command.ExecuteNonQueryAsync());
+            }
+
+            Assert.Empty(server.StatementReleasedLobHandles);
+            await command.DisposeAsync();
+            Assert.Equal(new[] { 21 }, server.StatementReleasedLobHandles);
+            Assert.Empty(server.FreedLobHandles);
+            Assert.Empty(server.RejectedLobStatementDeletes);
+        }
+
+        await using var reopened = await source.OpenConnectionAsync();
+        Assert.Equal(1, server.AcceptedConnectionCount);
+        await using var next = new Db2iCommand("INSERT INTO LOBS(V) VALUES (?)", reopened);
+        next.Parameters.Add("v", type == 960 ? Array.Empty<byte>() : string.Empty);
+        Assert.Equal(1, await next.ExecuteNonQueryAsync());
+    }
+
+    [Fact]
+    public async Task OutputLocatorsAreFreedWhileInputLocatorsRemainOwnedByTheStatement()
+    {
+        var scenario = BinaryQuery([1, 2, 3]) with { ParameterFormat = InputScenario(960).ParameterFormat };
+        await using var server = new FakeIbmIHostServer(queryScenario: scenario);
+        await using var connection = CreateConnection(server);
+        await connection.OpenAsync();
+        await using var command = new Db2iCommand("VALUES CAST(? AS BLOB(1M))", connection);
+        command.Parameters.Add("b", new byte[] { 1, 2, 3 });
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(new byte[] { 1, 2, 3 }, reader.GetValue(0));
+        }
+
+        Assert.Equal(new[] { 11 }, server.FreedLobHandles);
+        Assert.Empty(server.StatementReleasedLobHandles);
+        await command.DisposeAsync();
+        Assert.Equal(new[] { 11 }, server.FreedLobHandles);
+        Assert.Equal(new[] { 21 }, server.StatementReleasedLobHandles);
+        Assert.Empty(server.RejectedLobStatementDeletes);
     }
 
     [Fact]
@@ -403,8 +590,10 @@ public sealed class Db2iLobTests
         Assert.Equal((byte)0xFF, data.Span[21]);
     }
 
-    [Fact]
-    public async Task RollbackInvalidatesPreparedInputLocators()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TransactionCompletionInvalidatesInputLocatorsWithoutExplicitlyFreeingThem(bool commit)
     {
         await using var server = new FakeIbmIHostServer(queryScenario: InputScenario(960));
         await using var connection = CreateConnection(server);
@@ -415,12 +604,25 @@ public sealed class Db2iLobTests
         {
             command.Transaction = (Db2iTransaction)transaction;
             await command.ExecuteNonQueryAsync();
-            await transaction.RollbackAsync();
+            if (commit)
+            {
+                await transaction.CommitAsync();
+            }
+            else
+            {
+                await transaction.RollbackAsync();
+            }
+
+            Assert.Empty(server.FreedLobHandles);
+            Assert.Empty(server.StatementReleasedLobHandles);
         }
         command.Transaction = null;
         await command.ExecuteNonQueryAsync();
         Assert.Equal(2, server.PreparedStatements.Count);
         Assert.Equal(2, server.ExecutedLobs.Count);
+        Assert.Equal(new[] { 21 }, server.StatementReleasedLobHandles);
+        Assert.Empty(server.FreedLobHandles);
+        Assert.Empty(server.RejectedLobStatementDeletes);
     }
 
     [Theory]

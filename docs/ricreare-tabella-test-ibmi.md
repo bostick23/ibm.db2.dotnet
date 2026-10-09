@@ -224,9 +224,17 @@ del punto 6.
 
 ## 8. Caricare la configurazione ed eseguire i test
 
-Le credenziali restano nel file locale, escluso da Git. `dotnet test` non
-carica automaticamente il file: nella stessa sessione PowerShell da cui
-avviare i test, eseguire:
+Le credenziali restano nel file locale, escluso da Git. Il runner le carica
+solo per l'esecuzione, ripristina l'ambiente e salva il risultato TRX in
+`TestResults/ibmi`:
+
+```powershell
+./scripts/Test-IbmI.ps1
+./scripts/Test-IbmI.ps1 -Filter 'FullyQualifiedName~RealIbmILobIntegrationTests'
+```
+
+Se si preferisce avviare direttamente `dotnet test`, che non carica da solo
+il file, eseguire nella stessa sessione PowerShell:
 
 ```powershell
 Set-Location C:\Sviluppo\ibm.db2.dotnet
@@ -249,9 +257,10 @@ dotnet test Db2i.sln --configuration Release --filter 'Category=Integration' --l
 ```
 
 I test verificano la firma della tabella prima di scrivere, scelgono ID liberi
-e ripuliscono le righe create. I test transazionali possono terminare senza
-eseguire la verifica se il journaling non è attivo: controllare anche l'output
-del test, non soltanto il conteggio dei casi superati.
+e ripuliscono le righe create. Se un test DML o LOB è abilitato esplicitamente,
+la mancanza delle impostazioni richieste o del journaling produce un errore.
+I test non abilitati sono riportati come `Skipped`; i messaggi delle fasi
+completate sono disponibili nel TRX e nell'output dettagliato del test.
 
 Per eseguire soltanto i LOB, dopo aver caricato lo stesso file:
 
@@ -261,7 +270,8 @@ dotnet test Db2i.sln -c Release --filter 'FullyQualifiedName~RealIbmILobIntegrat
 
 Con le due tabelle valide e journaled e le connessioni TCP/TLS configurate,
 tutti i 16 casi di integrazione attuali hanno i prerequisiti per effettuare
-le verifiche reali. Un caso riportato come superato può aver terminato senza
-verifica se mancano le sue variabili; per questo devono essere presenti
-entrambi i connection string, entrambi i flag di abilitazione e i nomi delle
-tabelle. La suite non crea automaticamente strutture sul server.
+le verifiche reali. Devono essere presenti entrambi i connection string,
+entrambi i flag di abilitazione e i nomi delle tabelle. La suite non crea
+automaticamente strutture sul server. Un timeout di connessione richiede
+prima di verificare disponibilità del server e rete/VPN; una connessione
+rifiutata su 9471 richiede di verificare il servizio TLS del punto 6.

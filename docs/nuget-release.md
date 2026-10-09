@@ -108,6 +108,8 @@ After a successful run, check:
   is visible on NuGet.org; indexing and symbol validation can take a few minutes.
 - A consumer can restore `Db2i.AdoNet` with the explicit released version.
 
-OIDC authentication can only be verified end to end after the policy is
-configured and a real release is published. Do not set `NUGET_API_KEY` as a
+OIDC authentication and both package uploads were verified end to end by the
+first `0.5.0-alpha.4` release on October 8, 2026
+([successful workflow run](https://github.com/bostick23/ibm.db2.dotnet/actions/runs/37794211013)).
+Do not set `NUGET_API_KEY` as a
 repository secret: the login action provides the temporary key for each run.

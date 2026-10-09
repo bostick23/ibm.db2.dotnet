@@ -404,7 +404,10 @@ batching was also verified over real TCP; transactional verification remains pen
 Opt-in batch tests cover prepared queries with multiple result sets over
 TCP/TLS and transactional DML rollback on the authorized journaled table.
 
-M4.3 LOB validation is also opt-in and remains pending on real IBM i. It uses
+M4.3 LOB validation is opt-in. On October 8, 2026, real TCP uploads/downloads
+of a 17 MiB BLOB, CLOB, DBCLOB, and rollback completed, but statement disposal
+failed. The unreleased locator-ownership fix and cleanup regressions still
+require a real-host rerun; the host was unavailable on October 9. It uses
 the existing TCP connection setting plus:
 
 ```powershell

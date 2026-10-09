@@ -1,9 +1,69 @@
 # Work status
 
-Last updated: October 8, 2026.
+Last updated: October 9, 2026.
 
 This file records the project's operational status. The roadmap defines the
 milestones; active implementation work is tracked here.
+
+## Resume checkpoint
+
+Update this section whenever a work item is completed, fails, or changes direction.
+Keep exact commands and outstanding prerequisites here before ending a session.
+
+- Release baseline: `main`, commit `400bde9` (`0.5.0-alpha.4`). Current fixes
+  remain in Unreleased; do not reuse the published version for another package.
+- [x] Confirm `0.5.0-alpha.4` publication: GitHub run `37794211013` succeeded,
+  including OIDC login, package/symbol pushes, and release attachments. NuGet's
+  version index includes `0.5.0-alpha.4`.
+- [x] Run the opt-in integration suite using `tests/Db2i.Tests/.env.local`;
+  record which checks actually exercise the host and any missing prerequisites.
+- [x] Implement input-locator ownership and cleanup safety fixes; validate
+  local regressions for disposal, pool reuse, transactions, partial uploads,
+  interrupted cleanup, and failed diagnostic retrieval.
+- [ ] Confirm the ownership fix against the real host; no real execution of
+  the corrected LOB path has succeeded yet because the environment is offline.
+- [x] Record M4.4 stored-procedure/output-parameter implementation boundaries
+  below; complete the current LOB cleanup fix first.
+- [x] Run the full Release suite: 223 passed, 14 opt-in integration tests
+  skipped, zero failures; build both net8.0 and net10.0. Result:
+  `C:/t/db2i-local-oct09/local-oct09.trx`.
+- [x] Finish the environment-loading runner; offline checks cover literal
+  quotes/comments, path resolution, exit codes, and environment restoration.
+- [x] Update README, roadmap, setup guide, contribution guide, and Unreleased
+  changelog. Latest code/commit state can be checked with `git status` and
+  `git log -1`; do not infer completion from an old test count.
+
+Latest real run: 16 cases, 13 passed and 3 failed. TCP batch/DML/pooling cases
+passed; confirm transactional stages explicitly because older tests could return
+early on missing journaling. Both TLS cases fail with connection refused on
+port 9471 (server prerequisite). LOB fails during batch cleanup with host return
+code -816 while deleting the SQL request parameter block; investigate whether
+that cleanup masks an earlier upload/read error. Result:
+`C:/t/db2i-integration-resume/real-ibmi-resume.trx`.
+
+October 9 resume: the previous session left changes before credits ran out.
+Upload/download (17 MiB BLOB, CLOB, DBCLOB) and
+rollback succeeded; only subsequent statement disposal failed with -816/PWS0001.
+JTOpen review found that descriptor input locators are owned by the RPB and must
+not be freed individually. `Db2iLobSession.cs` now invalidates preparation at
+transaction boundaries but leaves these locators to DeleteRPB. Regression
+coverage passes; the fix still needs a real rerun. Result-row locators still
+use FreeLOB. Failed/interrupted deletion now prevents pooled session reuse.
+
+Integration tests now report absent opt-ins as skipped and enabled missing
+journaling as failures. The LOB test has stage diagnostics. The new
+`scripts/Test-IbmI.ps1` runner and contribution instructions are complete.
+
+October 9 rerun reached a TCP connect timeout before exercising LOB code.
+The user confirmed the IBM i environment is unavailable today. **Do not retry
+real tests until availability is confirmed.** Result:
+`C:/t/db2i-integration-oct09/ibmi-20261009-081952-766-47592.trx`.
+
+Next action: implement the M4.4 protocol/descriptor steps below while the host
+is unavailable. Real LOB fix verification remains pending. When the host returns, run
+`./scripts/Test-IbmI.ps1 -Filter 'FullyQualifiedName~RealIbmILobIntegrationTests'`
+first, then the complete integration suite. Never copy credentials into this
+file or logs.
 
 ## Current status
 
@@ -12,13 +72,13 @@ milestones; active implementation work is tracked here.
   real IBM i LOB and M4.2 batching validation pending**.
 - Most recently completed milestone: **M3 — DML and transactions**,
   version `0.4.0-alpha.1`.
-- Prepared package version: **`0.5.0-alpha.4`**; publication will be triggered
-  by a GitHub Release after the NuGet Trusted Publishing policy is configured.
-- Current verification: 226 Release tests passed and .NET 8/.NET 10 builds
-  succeeded without warnings or errors. This includes 210 local tests and 16 opt-in
-  integration cases that performed no external connections because the IBM i
-  environment variables were not configured. Real IBM i batching and LOB
-  validation remain pending.
+- Published package version: **`0.5.0-alpha.4`**, released through NuGet Trusted
+  Publishing on October 8, 2026 (GitHub run `37794211013`).
+- Current verification: 223 local Release tests passed, 14 opt-in integration
+  tests explicitly skipped, and .NET 8/.NET 10 builds succeeded. xUnit reports
+  a disabled three-row theory as one skipped test, so the enabled integration
+  suite still has 16 cases. Full real LOB validation and explicit transactional
+  batch-stage confirmation remain pending.
 - Subsequent integration run loading `tests/Db2i.Tests/.env.local`: 16 cases,
   11 reported passed and 5 failed. Eight TCP cases actually exercised the host,
   including read-only batching; two TLS cases and the LOB case performed no
@@ -34,7 +94,8 @@ milestones; active implementation work is tracked here.
   retryable package/symbol pushes. Seven release-gate tests and actionlint
   validation pass. Both packages contain the .NET 8/.NET 10 targets and Source
   Link metadata; explicit Git/common build references restore Source Link
-  generation with version 10.0.303. OIDC verification awaits the first release.
+  generation with version 10.0.303. OIDC login and both uploads succeeded in the
+  first release run; NuGet.org lists the released version.
   See `docs/nuget-release.md` for setup.
 - Previous M4.1 verification: 104 Release tests passed; .NET 8 and .NET 10 builds;
   Integration category 12/12, including 11 real TCP cases covering queries,
@@ -84,8 +145,32 @@ block M3.
 - [x] Update README, roadmap, contribution guide, and the release changelog.
 - [ ] Run real IBM i LOB validation with `DB2I_TEST_LOB_ENABLED=true` and
   `DB2I_TEST_LOB_TABLE` configured alongside the existing TCP connection setting.
-- [ ] Publish `0.5.0-alpha.4` through Trusted Publishing with pending real-host
-  verification explicitly stated; M4.2 transaction verification remains separate.
+- [x] Publish `0.5.0-alpha.4` through Trusted Publishing. Pending real-host
+  verification is recorded in package notes/changelog; M4.2 transaction
+  verification remains separate.
+
+## Next development: M4.4 — Stored procedures and output parameters
+
+The initial read-only review is complete; implementation has not started.
+
+- [ ] Map JTOpen callable-statement requests, output descriptors/data, dynamic
+  result sets, and procedure return status before changing public behavior.
+- [ ] Implement `CommandType.StoredProcedure` and validated CALL construction;
+  retain positional binding and reject unsupported command forms explicitly.
+- [ ] Support `Output`, `InputOutput`, and `ReturnValue` through descriptors and
+  returned values. The existing procedure enum alone does not provide support.
+- [ ] Define output availability after reader/result completion, including
+  batch attribution, timeout/cancellation, preparation reuse, and transaction changes.
+- [ ] Add deterministic protocol vectors and simulated-host tests, then an
+  explicitly enabled real-host test with documented dedicated procedure setup.
+- [ ] Update README/roadmap/changelog and run Release tests for .NET 8 plus
+  both library targets before a future release version is prepared.
+
+Start in `Db2iCommand.EnsureCanExecute`/statement-kind validation,
+`Db2iTypeCodec` direction validation, `Db2iBatch` command validation, and
+`Db2iSession.ExecuteNonQueryAsync`. Review `AS400JDBCCallableStatement`,
+`AS400JDBCStatement`, and descriptor/result classes in JTOpen. No server
+procedures or tables should be created implicitly by the integration tests.
 
 ## M4.2 — Sequential ADO.NET batching
 
@@ -104,7 +189,7 @@ block M3.
 - [x] Add opt-in real batch query and transactional DML rollback tests.
 - [x] Update Source Link to `10.0.303` to address `GHSA-23fw-v26w-5fgq`.
 - [ ] Verify batching against a real IBM i system.
-- [ ] Publish the batching implementation in `0.5.0-alpha.4` with validation limits documented.
+- [x] Publish the batching implementation in `0.5.0-alpha.4` with validation limits documented.
 
 Batches execute sequentially without array binding or reduced network round
 trips. They do not start an implicit transaction: callers own explicit commit

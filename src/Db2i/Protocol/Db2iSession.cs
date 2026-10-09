@@ -17,6 +17,7 @@ internal sealed partial class Db2iSession : IAsyncDisposable, IDisposable
     private short _locatorPersistence;
     private bool _autoCommit = true;
     private bool _disposed;
+    private bool _statementCleanupUncertain;
 
     private Db2iSession(Db2iTransport transport, Db2iServerInfo serverInfo)
     {
@@ -27,7 +28,8 @@ internal sealed partial class Db2iSession : IAsyncDisposable, IDisposable
     internal Db2iServerInfo ServerInfo { get; }
 
     internal bool IsPotentiallyUsable
-        => !_disposed && !_lobCleanupUncertain && !HasPendingReply && _transport.IsPotentiallyUsable;
+        => !_disposed && !_lobCleanupUncertain && !_statementCleanupUncertain
+            && !HasPendingReply && _transport.IsPotentiallyUsable;
 
     internal Db2iSessionLease AcquireOperation()
     {
@@ -486,48 +488,93 @@ internal sealed partial class Db2iSession : IAsyncDisposable, IDisposable
         }
 
         EnsureOwnedStatement(statement);
-        await ReleaseStatementLobsAsync(statement, cancellationToken).ConfigureAwait(false);
-        if (statement.HasClientDescriptor)
+        try
         {
+            // JTOpen AS400JDBCPreparedStatementImpl.close leaves input locators
+            // owned by the RPB. Only result-row locators use explicit FreeLOB.
+            if (statement.HasClientDescriptor)
+            {
+                await _transport.SendAsync(
+                        SqlProtocol.CreateDeleteDescriptorRequest(statement.Handle),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            await DeleteRpbAsync(statement.Handle, cancellationToken).ConfigureAwait(false);
             await _transport.SendAsync(
-                    SqlProtocol.CreateDeleteDescriptorRequest(statement.Handle),
+                    SqlProtocol.CreateDeleteResultSetRequest(statement.Handle),
                     cancellationToken)
                 .ConfigureAwait(false);
+            var resultSetReply = DatabaseProtocol.ParseReply(
+                await _transport.ReceiveAsync(cancellationToken).ConfigureAwait(false),
+                statement.Handle);
+            EnsureSqlSuccessful(
+                resultSetReply,
+                SqlProtocol.DeleteResultSet,
+                "delete SQL result set",
+                allowEndOfData: false);
+            statement.MarkDeleted();
+            RemoveStatement(statement);
         }
-
-        await DeleteRpbAsync(statement.Handle, cancellationToken).ConfigureAwait(false);
-        await _transport.SendAsync(
-                SqlProtocol.CreateDeleteResultSetRequest(statement.Handle),
-                cancellationToken)
-            .ConfigureAwait(false);
-        var resultSetReply = DatabaseProtocol.ParseReply(
-            await _transport.ReceiveAsync(cancellationToken).ConfigureAwait(false),
-            statement.Handle);
-        EnsureSqlSuccessful(
-            resultSetReply,
-            SqlProtocol.DeleteResultSet,
-            "delete SQL result set",
-            allowEndOfData: false);
-        statement.MarkDeleted();
-        RemoveStatement(statement);
+        catch
+        {
+            // Cleanup uses the transport directly. An interrupted receive may
+            // leave a delayed reply even if a best-effort caller suppresses it.
+            _statementCleanupUncertain = true;
+            throw;
+        }
     }
 
     private async ValueTask DeleteRpbAsync(
         ushort handle,
         CancellationToken cancellationToken)
     {
-        await _transport.SendAsync(
-                SqlProtocol.CreateDeleteRpbRequest(handle),
-                cancellationToken)
-            .ConfigureAwait(false);
-        var reply = DatabaseProtocol.ParseReply(
-            await _transport.ReceiveAsync(cancellationToken).ConfigureAwait(false),
-            handle);
-        EnsureSqlSuccessful(
-            reply,
-            SqlProtocol.DeleteRpb,
-            "delete SQL request parameter block",
-            allowEndOfData: false);
+        try
+        {
+            await _transport.SendAsync(
+                    SqlProtocol.CreateDeleteRpbRequest(handle),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var reply = DatabaseProtocol.ParseReply(
+                await _transport.ReceiveAsync(cancellationToken).ConfigureAwait(false),
+                handle);
+            if (reply.ReturnFunctionId == SqlProtocol.DeleteRpb && reply.ReturnCode < 0)
+            {
+                var diagnostic = SqlProtocol.ParseDiagnostic(reply, ServerInfo.Ccsid);
+                Exception? diagnosticError = null;
+                try
+                {
+                    diagnostic = await RetrieveDiagnosticAsync(handle, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is Db2iException or IOException
+                    or OperationCanceledException or ObjectDisposedException or System.Net.Sockets.SocketException)
+                {
+                    // Preserve the host failure already received, including when
+                    // fetching its optional details fails or times out.
+                    diagnosticError = exception;
+                }
+
+                throw new Db2iException(
+                    diagnostic.BuildMessage("delete SQL request parameter block", reply.ErrorClass, reply.ReturnCode),
+                    Db2iErrorKind.Sql,
+                    innerException: diagnosticError,
+                    hostReturnCode: reply.ReturnCode,
+                    errorClass: reply.ErrorClass,
+                    sqlCode: diagnostic.SqlCode,
+                    sqlState: diagnostic.SqlState);
+            }
+            EnsureSqlSuccessful(
+                reply,
+                SqlProtocol.DeleteRpb,
+                "delete SQL request parameter block",
+                allowEndOfData: false);
+        }
+        catch
+        {
+            // Also covers cleanup of an RPB whose Prepare never completed.
+            _statementCleanupUncertain = true;
+            throw;
+        }
     }
 
     private async ValueTask<Db2iSqlDiagnostic> RetrieveDiagnosticAsync(
@@ -930,8 +977,6 @@ internal sealed class Db2iPreparedStatement
     internal Db2iDataFormat? ServerParameterFormat { get; }
 
     internal bool IsInvalidated { get; private set; }
-
-    internal bool LobLocatorsReleased { get; set; }
 
     internal void InvalidateLobPreparation() => IsInvalidated = true;
 

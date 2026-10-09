@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- retain descriptor-owned input LOB locators until their statement is deleted,
+  following JTOpen ownership rules, instead of sending FreeLOB before rollback
+  or disposal. This addresses the cleanup path that returned host error -816
+  after successful real LOB uploads, downloads, and rollback. The corrected
+  path has local regression coverage; a real-host rerun remains pending.
+- discard pooled sessions after interrupted or failed statement cleanup, and
+  preserve the original host error if retrieving additional diagnostics fails.
+
+### Changed
+
+- real IBM i tests report missing opt-in configuration as skipped; explicitly
+  enabled DML/LOB tests fail on missing required settings or journaling;
+- include integration-stage diagnostics and a PowerShell test runner that loads
+  the local environment without logging credentials and saves TRX results;
+- maintain a resume checkpoint in `TODO.md` with current work and exact next steps.
+
 ## [0.5.0-alpha.4] - 2026-10-08
 
 ### Added

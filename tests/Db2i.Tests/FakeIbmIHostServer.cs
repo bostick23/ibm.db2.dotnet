@@ -104,6 +104,10 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
 
     internal IReadOnlyList<int> FreedLobHandles => _freedLobHandles.ToArray();
 
+    internal IReadOnlyList<int> StatementReleasedLobHandles => _statementReleasedLobHandles.ToArray();
+
+    internal IReadOnlyList<ushort> RejectedLobStatementDeletes => _rejectedLobStatementDeletes.ToArray();
+
     internal IReadOnlyDictionary<int, byte[]> UploadedLobs => _uploadedLobs;
 
     internal IReadOnlyList<IReadOnlyDictionary<int, byte[]>> ExecutedLobs => _executedLobs.ToArray();
@@ -121,6 +125,8 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
     private readonly ConcurrentQueue<FakeLobRequest> _lobReads = new();
     private readonly ConcurrentQueue<FakeLobRequest> _lobWrites = new();
     private readonly ConcurrentQueue<int> _freedLobHandles = new();
+    private readonly ConcurrentQueue<int> _statementReleasedLobHandles = new();
+    private readonly ConcurrentQueue<ushort> _rejectedLobStatementDeletes = new();
     private readonly ConcurrentDictionary<int, byte[]> _uploadedLobs = new();
     private readonly ConcurrentQueue<IReadOnlyDictionary<int, byte[]>> _executedLobs = new();
     private readonly List<(bool AutoCommit, short CommitmentLevel)> _transactionModes = [];
@@ -322,6 +328,8 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
         var scenarioByHandle = new Dictionary<ushort, FakeQueryScenario>();
         var sqlByHandle = new Dictionary<ushort, string>();
         var lobs = new Dictionary<int, FakeLobData>();
+        var inputLobsByHandle = new Dictionary<ushort, HashSet<int>>();
+        var invalidInputLobOwners = new HashSet<ushort>();
         try
         {
             while (!_shutdown.IsCancellationRequested)
@@ -359,10 +367,17 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
 
                         foreach (var field in scenario.ParameterFormat.Fields)
                         {
-                            if (field.NativeType is 960 or 964 or 968)
+                            if (scenario.PrepareSqlCode is null && field.NativeType is 960 or 964 or 968)
                             {
                                 lobs.TryAdd(field.LobLocator, new FakeLobData(
                                     [], field.Ccsid, field.NativeType == 968));
+                                if (!inputLobsByHandle.TryGetValue(handle, out var inputLocators))
+                                {
+                                    inputLocators = [];
+                                    inputLobsByHandle.Add(handle, inputLocators);
+                                }
+
+                                inputLocators.Add(field.LobLocator);
                             }
                         }
                         if (scenario.StallOnPrepare)
@@ -533,17 +548,75 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
                     case 0x1817:
                     case 0x1819:
                         await HandleLobAsync(stream, packet, scenario, lobs).ConfigureAwait(false);
+                        if (packet.Header.RequestReplyId == 0x1819 && scenario.LobFreeSqlCode is null)
+                        {
+                            var freedLocator = ReadInt32CodePoint(packet, 0x3818);
+                            foreach (var owner in inputLobsByHandle)
+                            {
+                                if (owner.Value.Contains(freedLocator))
+                                {
+                                    invalidInputLobOwners.Add(owner.Key);
+                                }
+                            }
+                        }
                         break;
                     case SqlProtocol.Close:
                     case SqlProtocol.DeleteDescriptor:
                         break;
                     case SqlProtocol.DeleteResultSet:
-                    case SqlProtocol.DeleteRpb:
                         await WriteAsync(
                                 stream,
                                 CreateSqlReply(
                                     packet.Header.CorrelationId,
                                     packet.Header.RequestReplyId))
+                            .ConfigureAwait(false);
+                        break;
+                    case SqlProtocol.SendResultSet:
+                        var diagnosticReply = scenario.MalformedCleanupDiagnostic
+                            ? CreateSqlReply(
+                                packet.Header.CorrelationId, SqlProtocol.SendResultSet,
+                                sqlCode: -901, sqlState: "HY000",
+                                codePoints: [(0x3802, new byte[] { 0, 37, 0, 1 })])
+                            : CreateSqlReply(
+                                packet.Header.CorrelationId, SqlProtocol.SendResultSet,
+                                sqlCode: -901, sqlState: "HY000",
+                                errorMessage: "Fake statement cleanup failure.");
+                        await WriteAsync(stream, diagnosticReply)
+                            .ConfigureAwait(false);
+                        break;
+                    case SqlProtocol.DeleteRpb:
+                        if (scenario.StallOnDeleteRpb)
+                        {
+                            await _cancelReceived.Task.WaitAsync(_shutdown.Token).ConfigureAwait(false);
+                        }
+
+                        // Descriptor input locators belong to the RPB. IBM i rejects
+                        // DeleteRPB with class 2 / -816 after an explicit FreeLOB has
+                        // invalidated one; result-row locators have separate ownership.
+                        var deleteReturnCode = invalidInputLobOwners.Contains(handle)
+                            ? -816
+                            : scenario.DeleteRpbReturnCode;
+                        if (deleteReturnCode != 0)
+                        {
+                            _rejectedLobStatementDeletes.Enqueue(handle);
+                        }
+                        else if (inputLobsByHandle.Remove(handle, out var deletedLocators))
+                        {
+                            foreach (var locator in deletedLocators)
+                            {
+                                _statementReleasedLobHandles.Enqueue(locator);
+                                if (!inputLobsByHandle.Values.Any(locators => locators.Contains(locator)))
+                                {
+                                    lobs.Remove(locator);
+                                }
+                            }
+                        }
+
+                        await WriteAsync(stream, CreateSqlReply(
+                                packet.Header.CorrelationId, SqlProtocol.DeleteRpb,
+                                errorClass: deleteReturnCode == 0 ? (short)0 : (short)2,
+                                returnCode: deleteReturnCode,
+                                includeSqlca: false))
                             .ConfigureAwait(false);
                         break;
                     default:
@@ -837,7 +910,8 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
         int sqlCode = 0,
         string sqlState = "00000",
         string? errorMessage = null,
-        IReadOnlyList<(ushort CodePoint, byte[] Payload)>? codePoints = null)
+        IReadOnlyList<(ushort CodePoint, byte[] Payload)>? codePoints = null,
+        bool includeSqlca = true)
     {
         var values = new List<(ushort CodePoint, byte[] Payload)>();
         if (codePoints is not null)
@@ -845,7 +919,7 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
             values.AddRange(codePoints);
         }
 
-        if (!values.Any(value => value.CodePoint == 0x3807))
+        if (includeSqlca && !values.Any(value => value.CodePoint == 0x3807))
         {
             values.Add((0x3807, CreateSqlca(sqlCode, sqlState)));
         }
@@ -1176,7 +1250,10 @@ internal sealed record FakeQueryScenario(
     bool StallOnLobWrite = false,
     int? LobReadSqlCode = null,
     int? LobWriteSqlCode = null,
-    int? LobFreeSqlCode = null);
+    int? LobFreeSqlCode = null,
+    int DeleteRpbReturnCode = 0,
+    bool StallOnDeleteRpb = false,
+    bool MalformedCleanupDiagnostic = false);
 
 internal sealed record FakeLobData(
     byte[] Data,

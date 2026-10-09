@@ -98,25 +98,9 @@ internal sealed partial class Db2iSession
         }
     }
 
-    private async ValueTask ReleaseStatementLobsAsync(
-        Db2iPreparedStatement statement, CancellationToken cancellationToken)
+    private ValueTask InvalidateLobStatementsAsync(CancellationToken cancellationToken)
     {
-        if (statement.LobLocatorsReleased || statement.ServerParameterFormat is not { } format)
-        {
-            return;
-        }
-
-        foreach (var handle in format.Fields.Where(field => field.IsLob && field.LobLocator > 0)
-                     .Select(field => field.LobLocator).Distinct())
-        {
-            await FreeLobAsync(statement.Handle, handle, cancellationToken).ConfigureAwait(false);
-        }
-
-        statement.LobLocatorsReleased = true;
-    }
-
-    private async ValueTask InvalidateLobStatementsAsync(CancellationToken cancellationToken)
-    {
+        cancellationToken.ThrowIfCancellationRequested();
         Db2iPreparedStatement[] statements;
         lock (_statementLock)
         {
@@ -127,7 +111,10 @@ internal sealed partial class Db2iSession
         foreach (var statement in statements)
         {
             statement.InvalidateLobPreparation();
-            await ReleaseStatementLobsAsync(statement, cancellationToken).ConfigureAwait(false);
         }
+
+        // Like JTOpen's prepared statements, retain descriptor-owned input
+        // locators until DeleteRPB. Only result-row locators use explicit FreeLOB.
+        return ValueTask.CompletedTask;
     }
 }

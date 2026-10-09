@@ -87,14 +87,17 @@ They stop on the first error and require a caller-managed explicit transaction
 for atomicity. This phase provides ADO.NET compatibility through sequential
 execution; it does not reduce network round trips or implement array binding.
 Read-only TCP batching has been verified. Transactional batching verification
-remains pending; `0.5.0-alpha.4` prepares the prerelease package.
+remains pending; `0.5.0-alpha.4` is available on NuGet.org.
 
 M4.3 adds synchronous/asynchronous LOB reads and `Stream`/`TextReader` input
 parameters inferred from server descriptors. Local tests cover wire vectors,
 multibyte text, parameter reuse, cancellation, timeout, transaction changes,
 pool cleanup, and multiple batch results. Real verification requires an
-explicitly enabled dedicated journaled table; it remains pending, together
-with the separate M4.2 transactional batching verification.
+explicitly enabled dedicated journaled table. The October 8 TCP run completed
+LOB upload/download and rollback, then failed during statement disposal. The
+unreleased input-locator ownership and cleanup fixes have local regression
+coverage but still need a real rerun, together with explicit M4.2 transactional
+batch stage verification. The host was unavailable on October 9.
 
 Releases publish through GitHub Actions and NuGet Trusted Publishing. The
 [release guide](nuget-release.md) documents the one-time policy/environment

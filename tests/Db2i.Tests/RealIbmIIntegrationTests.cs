@@ -1,24 +1,26 @@
+using Xunit.Abstractions;
+
 namespace Db2i.Tests;
 
 public sealed class RealIbmIIntegrationTests
 {
-    public static IEnumerable<object[]> ConfiguredConnections()
-    {
-        yield return ["DB2I_TEST_TCP_CONNECTION_STRING"];
-        yield return ["DB2I_TEST_TLS_CONNECTION_STRING"];
-    }
+    private readonly ITestOutputHelper _output;
 
-    [Theory]
-    [MemberData(nameof(ConfiguredConnections))]
+    public RealIbmIIntegrationTests(ITestOutputHelper output) => _output = output;
+
+    [IbmIIntegrationFact]
     [Trait("Category", "Integration")]
-    public async Task ExecutesReadOnlyBatchesAgainstConfiguredIbmI(string environmentVariable)
-    {
-        var connectionString = Environment.GetEnvironmentVariable(environmentVariable);
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            return;
-        }
+    public Task ExecutesReadOnlyBatchesAgainstConfiguredIbmIOverTcp() =>
+        ExecutesReadOnlyBatchesAgainstConfiguredIbmI("DB2I_TEST_TCP_CONNECTION_STRING");
 
+    [IbmIIntegrationFact("DB2I_TEST_TLS_CONNECTION_STRING")]
+    [Trait("Category", "Integration")]
+    public Task ExecutesReadOnlyBatchesAgainstConfiguredIbmIOverTls() =>
+        ExecutesReadOnlyBatchesAgainstConfiguredIbmI("DB2I_TEST_TLS_CONNECTION_STRING");
+
+    private async Task ExecutesReadOnlyBatchesAgainstConfiguredIbmI(string environmentVariable)
+    {
+        var connectionString = GetConnectionString(environmentVariable);
         await using var connection = new Db2iConnection(connectionString);
         await connection.OpenAsync();
         await using var batch = connection.CreateBatch();
@@ -27,6 +29,7 @@ public sealed class RealIbmIIntegrationTests
         var second = batch.BatchCommands.Add("VALUES CAST(? AS INTEGER)");
         second.Parameters.Add("second", 42);
         await batch.PrepareAsync();
+        _output.WriteLine("Prepared two real IBM i batch commands.");
 
         await using (var reader = await batch.ExecuteReaderAsync())
         {
@@ -41,25 +44,18 @@ public sealed class RealIbmIIntegrationTests
         first.Parameters[0].Value = 11;
         Assert.Equal(11, await batch.ExecuteScalarAsync());
         Assert.All(batch.BatchCommands, command => Assert.Equal(-1, command.RecordsAffected));
+        _output.WriteLine("Verified both batch result sets and scalar execution after parameter reuse.");
     }
 
-    [Fact]
+    [IbmIIntegrationFact(enabledVariable: "DB2I_TEST_DML_ENABLED")]
     [Trait("Category", "Integration")]
     public async Task RollsBackBatchDmlAgainstJournaledAuthorizedTable()
     {
         var configuration = GetDmlConfiguration();
-        if (configuration is null)
-        {
-            return;
-        }
-
         await using var connection = new Db2iConnection(configuration.ConnectionString);
         await connection.OpenAsync();
         await AssertAuthorizedTableSignatureAsync(connection, configuration);
-        if (!await IsJournaledAsync(connection, configuration))
-        {
-            return;
-        }
+        await AssertJournaledAsync(connection, configuration);
 
         var id = await FindUnusedIdAsync(connection, configuration);
         var marker = $"DB2I_M4_BATCH_{Guid.NewGuid():N}";
@@ -85,10 +81,13 @@ public sealed class RealIbmIIntegrationTests
 
                 Assert.Equal(2, await batch.ExecuteNonQueryAsync());
                 Assert.All(batch.BatchCommands, command => Assert.Equal(1, command.RecordsAffected));
+                _output.WriteLine("Executed transactional INSERT + UPDATE batch: total=2, each command=1.");
                 await transaction.RollbackAsync();
+                _output.WriteLine("Batch transaction rollback completed.");
             }
 
             Assert.Equal(0, await CountByIdAsync(connection, configuration, id));
+            _output.WriteLine("Verified the batch row is absent after rollback.");
         }
         finally
         {
@@ -104,17 +103,19 @@ public sealed class RealIbmIIntegrationTests
         }
     }
 
-    [Theory]
-    [MemberData(nameof(ConfiguredConnections))]
+    [IbmIIntegrationFact]
     [Trait("Category", "Integration")]
-    public async Task OpensAndClosesAConfiguredIbmISystem(string environmentVariable)
-    {
-        var connectionString = Environment.GetEnvironmentVariable(environmentVariable);
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            return;
-        }
+    public Task OpensAndClosesAConfiguredIbmISystemOverTcp() =>
+        OpensAndClosesAConfiguredIbmISystem("DB2I_TEST_TCP_CONNECTION_STRING");
 
+    [IbmIIntegrationFact("DB2I_TEST_TLS_CONNECTION_STRING")]
+    [Trait("Category", "Integration")]
+    public Task OpensAndClosesAConfiguredIbmISystemOverTls() =>
+        OpensAndClosesAConfiguredIbmISystem("DB2I_TEST_TLS_CONNECTION_STRING");
+
+    private async Task OpensAndClosesAConfiguredIbmISystem(string environmentVariable)
+    {
+        var connectionString = GetConnectionString(environmentVariable);
         await using var connection = new Db2iConnection(connectionString);
 
         await connection.OpenAsync(CancellationToken.None);
@@ -126,18 +127,14 @@ public sealed class RealIbmIIntegrationTests
 
         await connection.CloseAsync();
         Assert.Equal(System.Data.ConnectionState.Closed, connection.State);
+        _output.WriteLine("Verified open, server metadata, and close against real IBM i.");
     }
 
-    [Fact]
+    [IbmIIntegrationFact]
     [Trait("Category", "Integration")]
     public async Task ReusesTheSameRealIbmIJobFromTheGlobalPool()
     {
-        var connectionString = Environment.GetEnvironmentVariable(
-            "DB2I_TEST_TCP_CONNECTION_STRING");
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            return;
-        }
+        var connectionString = GetConnectionString("DB2I_TEST_TCP_CONNECTION_STRING");
 
         var builder = new Db2iConnectionStringBuilder(connectionString)
         {
@@ -156,18 +153,14 @@ public sealed class RealIbmIIntegrationTests
         Assert.Equal(jobIdentifier, second.ServerJobIdentifier);
         await second.CloseAsync();
         Db2iConnection.ClearPool(second);
+        _output.WriteLine("Verified two connections reused the same real IBM i server job.");
     }
 
-    [Fact]
+    [IbmIIntegrationFact]
     [Trait("Category", "Integration")]
     public async Task ExecutesReadOnlyM2QueriesAgainstConfiguredIbmI()
     {
-        var connectionString = Environment.GetEnvironmentVariable(
-            "DB2I_TEST_TCP_CONNECTION_STRING");
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            return;
-        }
+        var connectionString = GetConnectionString("DB2I_TEST_TCP_CONNECTION_STRING");
 
         await using var connection = new Db2iConnection(connectionString);
         await connection.OpenAsync();
@@ -253,18 +246,14 @@ public sealed class RealIbmIIntegrationTests
         Assert.True(exception.SqlCode < 0);
         Assert.False(string.IsNullOrWhiteSpace(exception.SqlState));
         Assert.Equal(System.Data.ConnectionState.Open, connection.State);
+        _output.WriteLine("Verified scalar types, parameters, 5,000-row fetch, and SQL error recovery.");
     }
 
-    [Fact]
+    [IbmIIntegrationFact(enabledVariable: "DB2I_TEST_DML_ENABLED")]
     [Trait("Category", "Integration")]
     public async Task ExecutesAutocommitDmlAgainstAuthorizedM3Table()
     {
         var configuration = GetDmlConfiguration();
-        if (configuration is null)
-        {
-            return;
-        }
-
         await using var connection = new Db2iConnection(configuration.ConnectionString);
         await connection.OpenAsync();
         await AssertAuthorizedTableSignatureAsync(connection, configuration);
@@ -317,6 +306,7 @@ public sealed class RealIbmIIntegrationTests
             {
                 delete.Parameters.Add("id", id);
                 Assert.Equal(1, await delete.ExecuteNonQueryAsync());
+                _output.WriteLine("Verified autocommit INSERT, UPDATE, SELECT, and DELETE.");
             }
         }
         finally
@@ -333,39 +323,37 @@ public sealed class RealIbmIIntegrationTests
         }
     }
 
-    [Fact]
+    [IbmIIntegrationFact]
     [Trait("Category", "Integration")]
     public async Task BeginsAndRollsBackEmptyTransactionAgainstIbmI()
     {
-        var connectionString = Environment.GetEnvironmentVariable(
-            "DB2I_TEST_TCP_CONNECTION_STRING");
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            return;
-        }
+        var connectionString = GetConnectionString("DB2I_TEST_TCP_CONNECTION_STRING");
 
         await using var connection = new Db2iConnection(connectionString);
         await connection.OpenAsync();
         await using var transaction = await connection.BeginTransactionAsync();
         await transaction.RollbackAsync();
+        _output.WriteLine("Verified empty transaction begin and rollback.");
     }
 
-    [Theory]
-    [InlineData("values")]
+    [IbmIIntegrationFact]
+    [Trait("Category", "Integration")]
+    public Task BeginsTransactionAfterReadOnlyValues() =>
+        BeginsTransactionAfterReadOnlyStatement("values", null);
+
+    [IbmIIntegrationTheory(enabledVariable: "DB2I_TEST_DML_ENABLED")]
     [InlineData("table-count")]
     [InlineData("catalog-columns")]
     [InlineData("catalog-journal")]
     [Trait("Category", "Integration")]
-    public async Task BeginsTransactionAfterReadOnlyStatement(string statement)
-    {
-        var configuration = statement == "values" ? null : GetDmlConfiguration();
-        var connectionString = configuration?.ConnectionString
-            ?? Environment.GetEnvironmentVariable("DB2I_TEST_TCP_CONNECTION_STRING");
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            return;
-        }
+    public Task BeginsTransactionAfterReadOnlyConfiguredTableStatement(string statement) =>
+        BeginsTransactionAfterReadOnlyStatement(statement, GetDmlConfiguration());
 
+    private async Task BeginsTransactionAfterReadOnlyStatement(
+        string statement, DmlConfiguration? configuration)
+    {
+        var connectionString = configuration?.ConnectionString
+            ?? GetConnectionString("DB2I_TEST_TCP_CONNECTION_STRING");
         var sql = statement switch
         {
             "values" => "VALUES 1",
@@ -394,28 +382,18 @@ public sealed class RealIbmIIntegrationTests
 
         await using var transaction = await connection.BeginTransactionAsync();
         await transaction.RollbackAsync();
+        _output.WriteLine($"Verified transaction begin and rollback after read-only statement: {statement}.");
     }
 
-    [Fact]
+    [IbmIIntegrationFact(enabledVariable: "DB2I_TEST_DML_ENABLED")]
     [Trait("Category", "Integration")]
     public async Task CommitsAndRollsBackAgainstJournaledAuthorizedM3Table()
     {
         var configuration = GetDmlConfiguration();
-        if (configuration is null)
-        {
-            return;
-        }
-
         await using var connection = new Db2iConnection(configuration.ConnectionString);
         await connection.OpenAsync();
         await AssertAuthorizedTableSignatureAsync(connection, configuration);
-        if (!await IsJournaledAsync(connection, configuration))
-        {
-            Console.WriteLine(
-                $"Test transazionale non eseguito: {configuration.Table} " +
-                "non risulta journaled.");
-            return;
-        }
+        await AssertJournaledAsync(connection, configuration);
 
         var id = await FindUnusedIdAsync(connection, configuration);
         var marker = $"DB2I_M3_TX_{Guid.NewGuid():N}";
@@ -435,6 +413,7 @@ public sealed class RealIbmIIntegrationTests
             }
 
             Assert.Equal(0, await CountByIdAsync(connection, configuration, id));
+            _output.WriteLine("Verified transactional INSERT was rolled back.");
 
             await using (var commit = await connection.BeginTransactionAsync(
                 System.Data.IsolationLevel.Serializable))
@@ -450,6 +429,7 @@ public sealed class RealIbmIIntegrationTests
             }
 
             Assert.Equal(1, await CountByIdAsync(connection, configuration, id));
+            _output.WriteLine("Verified SERIALIZABLE transaction committed its INSERT.");
         }
         finally
         {
@@ -465,16 +445,11 @@ public sealed class RealIbmIIntegrationTests
         }
     }
 
-    [Fact]
+    [IbmIIntegrationFact(enabledVariable: "DB2I_TEST_DML_ENABLED")]
     [Trait("Category", "Integration")]
     public async Task PoolReturnRollsBackAgainstJournaledAuthorizedTable()
     {
         var configuration = GetDmlConfiguration();
-        if (configuration is null)
-        {
-            return;
-        }
-
         var builder = new Db2iConnectionStringBuilder(configuration.ConnectionString)
         {
             Pooling = true,
@@ -485,13 +460,7 @@ public sealed class RealIbmIIntegrationTests
         Db2iConnection.ClearPool(first);
         await first.OpenAsync();
         await AssertAuthorizedTableSignatureAsync(first, configuration);
-        if (!await IsJournaledAsync(first, configuration))
-        {
-            Console.WriteLine(
-                $"Test pooling transazionale non eseguito: {configuration.Table} " +
-                "non risulta journaled.");
-            return;
-        }
+        await AssertJournaledAsync(first, configuration);
 
         var id = await FindUnusedIdAsync(first, configuration);
         var marker = $"DB2I_M4_POOL_{Guid.NewGuid():N}";
@@ -514,6 +483,7 @@ public sealed class RealIbmIIntegrationTests
 
             Assert.Equal(jobIdentifier, second.ServerJobIdentifier);
             Assert.Equal(0, await CountByIdAsync(second, configuration, id));
+            _output.WriteLine("Verified pool return rolled back INSERT and preserved the same server job.");
         }
         finally
         {
@@ -532,18 +502,13 @@ public sealed class RealIbmIIntegrationTests
         }
     }
 
-    private static DmlConfiguration? GetDmlConfiguration()
+    private DmlConfiguration GetDmlConfiguration()
     {
-        if (!string.Equals(
+        Assert.True(string.Equals(
             Environment.GetEnvironmentVariable("DB2I_TEST_DML_ENABLED")?.Trim(),
-            "true",
-            StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        var connectionString = GetRequiredEnvironmentVariable(
-            "DB2I_TEST_TCP_CONNECTION_STRING");
+            "true", StringComparison.OrdinalIgnoreCase),
+            "Set DB2I_TEST_DML_ENABLED=true to run this real IBM i test.");
+        var connectionString = GetConnectionString("DB2I_TEST_TCP_CONNECTION_STRING");
         var table = GetRequiredEnvironmentVariable("DB2I_TEST_DML_TABLE");
         var tableParts = table.Split('.');
         if (tableParts.Length != 2
@@ -576,6 +541,16 @@ public sealed class RealIbmIIntegrationTests
             columns[1],
             columns[2],
             columns[3]);
+    }
+
+    private string GetConnectionString(string environmentVariable)
+    {
+        var value = Environment.GetEnvironmentVariable(environmentVariable);
+        Assert.False(string.IsNullOrWhiteSpace(value),
+            $"{environmentVariable} is required for this explicitly enabled real IBM i test.");
+        var settings = new Db2iConnectionStringBuilder(value!);
+        _output.WriteLine($"Using {environmentVariable}: {(settings.UseSsl ? "TLS" : "TCP")}, port {settings.Port}.");
+        return value!;
     }
 
     private static string GetRequiredEnvironmentVariable(string name)
@@ -621,7 +596,7 @@ public sealed class RealIbmIIntegrationTests
     private static bool IsAsciiLetter(char character) =>
         character is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
 
-    private static async Task AssertAuthorizedTableSignatureAsync(
+    private async Task AssertAuthorizedTableSignatureAsync(
         Db2iConnection connection,
         DmlConfiguration configuration)
     {
@@ -660,6 +635,7 @@ public sealed class RealIbmIIntegrationTests
             (configuration.DecimalColumn, "DECIMAL", 9L, 9, 4, "N"),
         ],
             actual);
+        _output.WriteLine($"Validated dedicated DML table signature: {configuration.Table}.");
     }
 
     private static async Task<int> FindUnusedIdAsync(
@@ -694,7 +670,7 @@ public sealed class RealIbmIIntegrationTests
             System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private static async Task<bool> IsJournaledAsync(
+    private async Task AssertJournaledAsync(
         Db2iConnection connection,
         DmlConfiguration configuration)
     {
@@ -707,9 +683,13 @@ public sealed class RealIbmIIntegrationTests
             connection);
         command.Parameters.Add("schema", configuration.Schema);
         command.Parameters.Add("table", configuration.TableName);
-        return Convert.ToInt32(
+        var journaled = Convert.ToInt32(
             await command.ExecuteScalarAsync(),
             System.Globalization.CultureInfo.InvariantCulture) > 0;
+        Assert.True(journaled,
+            $"DML tests are explicitly enabled, but {configuration.Table} is not journaled. " +
+            "Enable journaling using docs/ricreare-tabella-test-ibmi.md before running transactional tests.");
+        _output.WriteLine($"Verified journaling for {configuration.Table}; transactional test will execute.");
     }
 
     private static Db2iCommand CreateInsert(
