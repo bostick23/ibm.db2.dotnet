@@ -296,6 +296,11 @@ Responsibilities are separated as follows:
 - [ ] real IBM i LOB validation;
 - [ ] stored procedures and output parameters.
 
+M4.4 development has started with internal procedure protocol/descriptor
+helpers and deterministic tests. Public procedure execution remains unsupported;
+the [protocol notes](docs/stored-procedure-protocol.md) describe the completed
+mapping and remaining command/reader lifecycle work.
+
 Acceptance criteria are tracked in [docs/roadmap.md](docs/roadmap.md).
 Current work and operational status are tracked in [TODO.md](TODO.md).
 

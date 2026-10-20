@@ -990,6 +990,7 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
             BinaryPrimitives.WriteInt16BigEndian(field[8..], (short)source.Scale);
             BinaryPrimitives.WriteInt16BigEndian(field[10..], (short)source.Precision);
             BinaryPrimitives.WriteUInt16BigEndian(field[12..], (ushort)source.Ccsid);
+            field[14] = (byte)source.ParameterMode;
             BinaryPrimitives.WriteInt32BigEndian(field[17..], source.LobLocator);
             BinaryPrimitives.WriteInt32BigEndian(field[26..], source.LobMaxSize);
             var name = IbmIEncoding.Encode(37, source.Name);
@@ -1074,7 +1075,8 @@ internal sealed class FakeIbmIHostServer : IAsyncDisposable
                 BinaryPrimitives.ReadInt16BigEndian(field[10..]),
                 BinaryPrimitives.ReadUInt16BigEndian(field[12..]),
                 string.Empty,
-                offset));
+                offset,
+                ParameterMode: (Db2iParameterMode)field[14]));
             offset += length;
         }
 

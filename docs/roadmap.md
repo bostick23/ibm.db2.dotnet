@@ -77,6 +77,8 @@ Implementation available in `0.4.0-alpha.1`:
   getters, bounded materialization, and command/batch lifetime support (M4.3,
   `0.5.0-alpha.4`);
 - [ ] real IBM i LOB validation;
+- [x] internal procedure protocol mapping, direction metadata, request builders,
+  and output/status parsing with deterministic tests (M4.4 groundwork);
 - [ ] stored procedures and output parameters;
 - [ ] metadata/schema;
 - [ ] Dapper integration and, separately, an EF Core provider.
@@ -98,6 +100,12 @@ LOB upload/download and rollback, then failed during statement disposal. The
 unreleased input-locator ownership and cleanup fixes have local regression
 coverage but still need a real rerun, together with explicit M4.2 transactional
 batch stage verification. The host was unavailable on October 9.
+
+M4.4 has completed its internal protocol/descriptor groundwork, with 43 new
+local tests. Public stored-procedure execution, output binding, and the
+multi-result reader lifecycle remain to be implemented. The
+[protocol notes](stored-procedure-protocol.md) pin the JTOpen sources and
+define the integration sequence and remaining lifetime requirements.
 
 Releases publish through GitHub Actions and NuGet Trusted Publishing. The
 [release guide](nuget-release.md) documents the one-time policy/environment

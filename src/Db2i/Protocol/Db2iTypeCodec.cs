@@ -21,6 +21,11 @@ internal static class Db2iTypeCodec
                 "M2 supporta soltanto parametri con Direction=Input.");
         }
 
+        if (serverField.IsArray)
+        {
+            throw new NotSupportedException("SQL array parameters are not supported.");
+        }
+
         var value = parameter.Value;
         if (serverField.IsLob)
         {
@@ -102,6 +107,7 @@ internal static class Db2iTypeCodec
                 : descriptor.Ccsid,
             Name = string.Empty,
             Offset = offset,
+            ParameterMode = serverField.ParameterMode,
         };
     }
 
@@ -149,6 +155,29 @@ internal static class Db2iTypeCodec
     internal static Db2iResultBlock DecodeResultBlock(
         ReadOnlySpan<byte> payload,
         Db2iDataFormat format)
+        => DecodeResultBlockCore(payload, format, outputParametersOnly: false);
+
+    internal static object?[] DecodeProcedureOutputRow(
+        ReadOnlySpan<byte> payload,
+        Db2iDataFormat serverParameterFormat)
+    {
+        // AS400JDBCPreparedStatementImpl.commonExecuteAfter sets row index 0
+        // on the original server parameter descriptor. IN slots still occupy
+        // space but their contents are not output values and must not be decoded.
+        // Check the count before allocating, including for zero-width records.
+        if (payload.Length < 20 || BinaryPrimitives.ReadInt32BigEndian(payload[4..]) != 1)
+        {
+            throw ClientAccessCodePoints.ProtocolError(
+                "A procedure output-parameter reply must contain exactly one complete row.");
+        }
+
+        return DecodeResultBlockCore(payload, serverParameterFormat, outputParametersOnly: true).Rows[0];
+    }
+
+    private static Db2iResultBlock DecodeResultBlockCore(
+        ReadOnlySpan<byte> payload,
+        Db2iDataFormat format,
+        bool outputParametersOnly)
     {
         if (payload.Length < 20)
         {
@@ -186,6 +215,11 @@ internal static class Db2iTypeCodec
             var rowStart = dataStart + (rowIndex * rowSize);
             for (var columnIndex = 0; columnIndex < columnCount; columnIndex++)
             {
+                if (outputParametersOnly && !format.Fields[columnIndex].IsOutputParameter)
+                {
+                    continue;
+                }
+
                 var isNull = indicatorSize == 2
                     && BinaryPrimitives.ReadInt16BigEndian(
                         payload.Slice(

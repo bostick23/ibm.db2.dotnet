@@ -441,7 +441,8 @@ internal static partial class SqlProtocol
                 name,
                 rowOffset,
                 BinaryPrimitives.ReadInt32BigEndian(field[17..]),
-                BinaryPrimitives.ReadInt32BigEndian(field[26..])));
+                BinaryPrimitives.ReadInt32BigEndian(field[26..]),
+                (Db2iParameterMode)field[14]));
             rowOffset = checked(rowOffset + length);
         }
 
@@ -486,7 +487,9 @@ internal static partial class SqlProtocol
                 name,
                 rowOffset,
                 BinaryPrimitives.ReadInt32BigEndian(field[17..]),
-                BinaryPrimitives.ReadInt32BigEndian(field[26..])));
+                BinaryPrimitives.ReadInt32BigEndian(field[26..]),
+                (Db2iParameterMode)field[14],
+                IsArray: (field[21] & 0x40) != 0));
             rowOffset = checked(rowOffset + length);
         }
 
@@ -564,6 +567,11 @@ internal static partial class SqlProtocol
         for (var index = 0; index < format.Fields.Count; index++)
         {
             var source = format.Fields[index];
+            if (source.IsArray)
+            {
+                throw new NotSupportedException("SQL array parameter descriptors are not supported.");
+            }
+
             var field = payload.AsSpan(16 + (index * 64), 64);
             BinaryPrimitives.WriteUInt16BigEndian(field, 64);
             BinaryPrimitives.WriteUInt16BigEndian(field[2..], (ushort)(source.NativeType | 1));
@@ -571,6 +579,7 @@ internal static partial class SqlProtocol
             BinaryPrimitives.WriteInt16BigEndian(field[8..], checked((short)source.Scale));
             BinaryPrimitives.WriteInt16BigEndian(field[10..], checked((short)source.Precision));
             BinaryPrimitives.WriteUInt16BigEndian(field[12..], checked((ushort)source.Ccsid));
+            field[14] = (byte)source.ParameterMode;
             BinaryPrimitives.WriteInt32BigEndian(field[17..], source.LobLocator);
             BinaryPrimitives.WriteInt32BigEndian(field[26..], source.LobMaxSize);
         }
@@ -750,11 +759,17 @@ internal sealed record Db2iFieldDescriptor(
     string Name,
     int Offset,
     int LobLocator = 0,
-    int LobMaxSize = 0)
+    int LobMaxSize = 0,
+    Db2iParameterMode ParameterMode = Db2iParameterMode.Unspecified,
+    bool IsArray = false)
 {
     internal int NativeType => SqlType & ~1;
 
     internal bool AllowNull => (SqlType & 1) != 0;
+
+    internal bool IsInputParameter => ParameterMode is Db2iParameterMode.Input or Db2iParameterMode.InputOutput;
+
+    internal bool IsOutputParameter => ParameterMode is Db2iParameterMode.Output or Db2iParameterMode.InputOutput;
 
     internal bool IsLob => NativeType is 404 or 408 or 412 or 960 or 964 or 968;
 
@@ -798,6 +813,17 @@ internal sealed record Db2iFieldDescriptor(
             Scale,
             IsLob);
     }
+}
+
+// JTOpen DBExtendedDataFormat/DBSuperExtendedDataFormat.getFieldParameterType
+// and JDServerRow.isInput/isOutput. Zero is retained for non-parameter fields;
+// a procedure binding must have a known mode from the server descriptor.
+internal enum Db2iParameterMode : byte
+{
+    Unspecified = 0,
+    Input = 0xF0,
+    Output = 0xF1,
+    InputOutput = 0xF2,
 }
 
 internal sealed record Db2iSqlDiagnostic(

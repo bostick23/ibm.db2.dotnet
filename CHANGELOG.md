@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- internal M4.4 protocol groundwork: IN/OUT/INOUT descriptor modes, procedure
+  execute/open/close request builders, and bounded output-row/return-status
+  parsing, with pinned JTOpen references and deterministic regression tests.
+  Public stored-procedure execution and output binding remain unsupported
+  until the command/reader lifecycle is implemented.
+
 ### Fixed
 
 - retain descriptor-owned input LOB locators until their statement is deleted,
@@ -13,6 +21,7 @@ All notable changes to this project are documented in this file.
   path has local regression coverage; a real-host rerun remains pending.
 - discard pooled sessions after interrupted or failed statement cleanup, and
   preserve the original host error if retrieving additional diagnostics fails.
+- reject SQL array parameter descriptors instead of binding them as scalars.
 
 ### Changed
 

@@ -1,6 +1,6 @@
 # Work status
 
-Last updated: October 9, 2026.
+Last updated: October 20, 2026.
 
 This file records the project's operational status. The roadmap defines the
 milestones; active implementation work is tracked here.
@@ -24,9 +24,16 @@ Keep exact commands and outstanding prerequisites here before ending a session.
   the corrected LOB path has succeeded yet because the environment is offline.
 - [x] Record M4.4 stored-procedure/output-parameter implementation boundaries
   below; complete the current LOB cleanup fix first.
-- [x] Run the full Release suite: 223 passed, 14 opt-in integration tests
-  skipped, zero failures; build both net8.0 and net10.0. Result:
-  `C:/t/db2i-local-oct09/local-oct09.trx`.
+- [x] Implement the M4.4 protocol/descriptor groundwork: retain IN/OUT/INOUT
+  modes, build procedure execute/open/close requests, and decode bounded
+  output rows, return status, and dynamic-result count. Pin the JTOpen sources
+  and record the remaining public lifecycle in `docs/stored-procedure-protocol.md`.
+- [x] Run the October 20 local Release suite on .NET 8.0.32: **266 passed**,
+  zero failures, including **43 new procedure protocol tests**. Integration
+  tests were explicitly excluded. Both net8.0/net10.0 library targets built.
+  Result: `TestResults/local-oct20/local-net8.trx`.
+- [ ] Connect procedure binding/execution to commands, sessions, readers, and
+  batches; public CALL/StoredProcedure and output parameters remain unsupported.
 - [x] Finish the environment-loading runner; offline checks cover literal
   quotes/comments, path resolution, exit codes, and environment restoration.
 - [x] Update README, roadmap, setup guide, contribution guide, and Unreleased
@@ -59,8 +66,36 @@ The user confirmed the IBM i environment is unavailable today. **Do not retry
 real tests until availability is confirmed.** Result:
 `C:/t/db2i-integration-oct09/ibmi-20261009-081952-766-47592.trx`.
 
-Next action: implement the M4.4 protocol/descriptor steps below while the host
-is unavailable. Real LOB fix verification remains pending. When the host returns, run
+October 20 resume: completed the internal M4.4 protocol/descriptor step with
+deterministic vectors, malformed-reply checks, and simulated-host regression
+coverage. No new procedure I/O path is enabled. No real-host tests were run.
+
+Local setup on this Mac: SDK 10.0.100 builds both targets, but initially only
+the .NET 10 runtime was installed. The global company NuGet feed returns 401;
+the successful restore used only `https://api.nuget.org/v3/index.json`. An
+official .NET 8.0.32 runtime was downloaded to `/private/tmp/db2i-dotnet8`,
+without changing the system installation. That temporary directory may need
+to be recreated in a later session. Successful verification command:
+
+```sh
+dotnet test Db2i.sln --configuration Release --no-restore \
+  --filter 'Category!=Integration' \
+  --logger 'trx;LogFileName=local-net8.trx' \
+  --results-directory TestResults/local-oct20 \
+  -- RunConfiguration.DotNetHostPath=/private/tmp/db2i-dotnet8/dotnet
+```
+
+If restore is needed, use
+`dotnet restore Db2i.sln --source https://api.nuget.org/v3/index.json`.
+When .NET 8 is installed normally, the custom `DotNetHostPath` is unnecessary.
+The initial missing-runtime/restore failures and preliminary .NET 10 run do
+not count as successful .NET 8 validation; `local-net8.trx` is the final run.
+
+Next action: implement validated CALL construction and direction-aware binding,
+then connect the procedure result-chain lifecycle described in
+`docs/stored-procedure-protocol.md`. Preserve the public rejection gates until
+execution, output completion, cancellation, and cleanup work together.
+Real LOB fix verification remains pending. When host availability is confirmed, run
 `./scripts/Test-IbmI.ps1 -Filter 'FullyQualifiedName~RealIbmILobIntegrationTests'`
 first, then the complete integration suite. Never copy credentials into this
 file or logs.
@@ -68,14 +103,17 @@ file or logs.
 ## Current status
 
 - Active milestone: **M4 — Application compatibility**.
-- Current phase: **M4.3 LOB locator streaming, implemented and tested locally;
-  real IBM i LOB and M4.2 batching validation pending**.
+- Current phase: **M4.4 internal protocol/descriptor groundwork complete;
+  public procedure execution and output binding pending**. M4.3 LOB streaming
+  is implemented locally; real LOB and M4.2 batching validation remain pending.
 - Most recently completed milestone: **M3 — DML and transactions**,
   version `0.4.0-alpha.1`.
 - Published package version: **`0.5.0-alpha.4`**, released through NuGet Trusted
   Publishing on October 8, 2026 (GitHub run `37794211013`).
-- Current verification: 223 local Release tests passed, 14 opt-in integration
-  tests explicitly skipped, and .NET 8/.NET 10 builds succeeded. xUnit reports
+- Current verification (October 20): 266 local Release tests passed on .NET 8;
+  .NET 8/.NET 10 builds succeeded. No real integration tests were run.
+- Previous October 9 verification: 223 local Release tests passed, 14 opt-in
+  integration tests explicitly skipped. xUnit reports
   a disabled three-row theory as one skipped test, so the enabled integration
   suite still has 16 cases. Full real LOB validation and explicit transactional
   batch-stage confirmation remain pending.
@@ -151,18 +189,29 @@ block M3.
 
 ## Next development: M4.4 — Stored procedures and output parameters
 
-The initial read-only review is complete; implementation has not started.
+Internal protocol/descriptor groundwork is complete. The public API remains
+unchanged until binding, execution, result iteration, and cleanup are connected.
+The pinned reference mapping and intended ADO.NET completion contract are in
+`docs/stored-procedure-protocol.md`.
 
-- [ ] Map JTOpen callable-statement requests, output descriptors/data, dynamic
+- [x] Map JTOpen callable-statement requests, output descriptors/data, dynamic
   result sets, and procedure return status before changing public behavior.
+- [x] Preserve parameter directions in both descriptor layouts and client
+  descriptor serialization; reject SQL array parameters explicitly.
+- [x] Add pure procedure execute/open/close builders and completion parsing
+  that distinguishes status, result count, output values, and result rows.
+- [x] Add 43 deterministic/simulated-host tests for the groundwork, including
+  truncation/allocation limits and unchanged public rejection gates.
 - [ ] Implement `CommandType.StoredProcedure` and validated CALL construction;
   retain positional binding and reject unsupported command forms explicitly.
 - [ ] Support `Output`, `InputOutput`, and `ReturnValue` through descriptors and
   returned values. The existing procedure enum alone does not provide support.
-- [ ] Define output availability after reader/result completion, including
+- [x] Specify the intended output-completion contract in the protocol notes.
+- [ ] Implement output availability after reader/result completion, including
   batch attribution, timeout/cancellation, preparation reuse, and transaction changes.
-- [ ] Add deterministic protocol vectors and simulated-host tests, then an
-  explicitly enabled real-host test with documented dedicated procedure setup.
+- [ ] Extend the protocol vectors and simulated-host tests to full procedure
+  execution/lifecycle, then add an explicitly enabled real-host test with
+  documented dedicated procedure setup.
 - [ ] Update README/roadmap/changelog and run Release tests for .NET 8 plus
   both library targets before a future release version is prepared.
 
